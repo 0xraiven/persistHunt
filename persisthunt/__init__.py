@@ -1,0 +1,1 @@
+"""PersistHunt core package."""

