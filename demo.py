@@ -7,6 +7,7 @@ from persisthunt.detectors.cron import CronDetector
 from persisthunt.detectors.systemd import SystemdDetector
 from persisthunt.detectors.ssh import SSHDetector
 from persisthunt.detectors.shell import ShellDetector
+from persisthunt.detectors.suid import SuidDetector
 
 def demo_stage1_findings():
     print("=== Stage 1: Finding Model & Collection Demo ===")
@@ -296,7 +297,71 @@ def demo_stage5_shell_detector():
             print(f"  Recommendation: {f.recommendation}")
             print()
 
-        print("--- Shell Fixture Findings JSON Output ---")
+def demo_stage6_suid_detector():
+    print("\n=== Stage 6: SUID/SGID Persistence Detector Demo ===")
+
+    # 1. Live audit on host system
+    print("\n--- Scanning Local Host System (SUID/SGID) ---")
+    detector = SuidDetector()
+    print(f"Detector Name: {detector.name}")
+    print(f"Detector Identifier: {detector.detector_id}")
+
+    host_findings = detector.scan()
+    print(f"Host SUID/SGID findings detected: {host_findings.count()}")
+    print(f"Host finding severity distribution: {host_findings.severity_counts()}")
+
+    # 2. Emulated audit with suspicious SUID/SGID binaries
+    print("\n--- Scanning Controlled Suspicious SUID/SGID Fixture ---")
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        usr_bin = root / "usr" / "bin"
+        usr_bin.mkdir(parents=True)
+        tmp = root / "tmp"
+        tmp.mkdir(parents=True)
+        opt = root / "opt"
+        opt.mkdir(parents=True)
+        user_home = root / "home" / "victim"
+        user_home.mkdir(parents=True)
+
+        # 1. Standard system SUID binary (passwd) -> INFO
+        passwd_bin = usr_bin / "passwd"
+        passwd_bin.write_bytes(b"\x7fELF\x02\x01\x01\x00")
+        passwd_bin.chmod(0o4755)
+
+        # 2. SUID shell interpreter (/usr/bin/bash) -> HIGH
+        bash_bin = usr_bin / "bash"
+        bash_bin.write_bytes(b"\x7fELF\x02\x01\x01\x00")
+        bash_bin.chmod(0o4755)
+
+        # 3. SUID binary staged in temporary directory -> HIGH
+        backdoor_tmp = tmp / "priv_backdoor"
+        backdoor_tmp.write_bytes(b"\x7fELF\x02\x01\x01\x00")
+        backdoor_tmp.chmod(0o4755)
+
+        # 4. Insecure world-writable SUID binary in /opt -> CRITICAL & MEDIUM
+        insecure_tool = opt / "legacy_daemon"
+        insecure_tool.write_bytes(b"\x7fELF\x02\x01\x01\x00")
+        insecure_tool.chmod(0o4777)
+
+        # 5. SUID binary in user home directory -> HIGH
+        user_agent = user_home / "stealth_agent"
+        user_agent.write_bytes(b"\x7fELF\x02\x01\x01\x00")
+        user_agent.chmod(0o4755)
+
+        mock_detector = SuidDetector(root_prefix=root)
+        mock_findings = mock_detector.scan()
+
+        print(f"Fixture findings detected: {mock_findings.count()}")
+        print(f"Severity breakdown: {mock_findings.severity_counts()}")
+        print("\nFindings detail:")
+        for f in mock_findings:
+            print(f"[{f.severity.value}] {f.id} - {f.title}")
+            print(f"  Location: {f.location}")
+            print(f"  Evidence: {f.evidence}")
+            print(f"  Recommendation: {f.recommendation}")
+            print()
+
+        print("--- SUID Fixture Findings JSON Output ---")
         print(json.dumps(mock_findings.to_dict(), indent=2))
 
 
@@ -306,6 +371,7 @@ def main():
     demo_stage3_systemd_detector()
     demo_stage4_ssh_detector()
     demo_stage5_shell_detector()
+    demo_stage6_suid_detector()
 
 if __name__ == "__main__":
     main()

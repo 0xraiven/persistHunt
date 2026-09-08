@@ -14,8 +14,8 @@ The finding engine provides a standardized representation for security findings.
 
 A `Finding` represents a single security issue detected on the system:
 
-- `id`: A unique identifier for the finding type (e.g., `PH-CRON-001`, `PH-SYSTEMD-001`, `PH-SSH-001`, `PH-SHELL-001`).
-- `category`: The security category (e.g., `cron`, `systemd`, `ssh`, `shell`).
+- `id`: A unique identifier for the finding type (e.g., `PH-CRON-001`, `PH-SYSTEMD-001`, `PH-SSH-001`, `PH-SHELL-001`, `PH-SUID-001`).
+- `category`: The security category (e.g., `cron`, `systemd`, `ssh`, `shell`, `suid`).
 - `severity`: Severity level, one of `Severity` enum values (`INFO`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
 - `title`: Short human-readable summary.
 - `description`: Detailed explanation of the detected condition.
@@ -216,6 +216,73 @@ for finding in findings.by_severity(Severity.HIGH):
 
 ---
 
+### Stage 6: SUID/SGID Persistence Detection
+
+Stage 6 implements `SuidDetector` for discovering and auditing binaries possessing elevated SUID (`chmod u+s`) and SGID (`chmod g+s`) privilege bits.
+
+#### Detection Scope & Strategy
+
+`SuidDetector` performs safe, read-only enumeration of filesystem paths using pure Python filesystem APIs (`os.scandir` and `stat()` with `follow_symlinks=False`):
+
+- **Standard Binary Paths**: `/bin`, `/sbin`, `/usr/bin`, `/usr/sbin`, `/usr/local/bin`, `/usr/local/sbin`, `/usr/lib`, `/usr/libexec`.
+- **Staging / Temporary Directories**: `/tmp`, `/var/tmp`, `/dev/shm`.
+- **User / Home Directories**: `/home`, `/root`.
+- **Third-Party / Non-Standard Directories**: `/opt`.
+
+#### Safety & Performance Architecture
+
+- **Strict Read-Only Execution**: Discovered binaries are never executed. No attempts are made to exploit binaries, escalate privileges, or alter file permissions.
+- **Symlink Protection**: Linux kernels ignore SUID/SGID bits on symlinks. `SuidDetector` strictly inspects `is_symlink()` and avoids following symlinks to prevent redundant evaluations and infinite traversal loops.
+- **Virtual Filesystem Exclusion**: Traversal automatically skips pseudo/virtual filesystems (`/proc`, `/sys`, `/dev`, `/run`) and developer cache trees (`.git`, `.cache`, `node_modules`).
+- **Calibrated Risk Model**: Normal system binaries (e.g., `/usr/bin/passwd`, `/usr/bin/sudo`) are cataloged as `INFO` rather than false-positive `CRITICAL` alerts. Critical and high severities are reserved for writable SUID files, SUID shells, and binaries placed in temporary or user directories.
+
+#### Indicator Rules & Finding IDs (SUID/SGID)
+
+| Finding ID | Category | Severity | Description | Indicators |
+|---|---|---|---|---|
+| `PH-SUID-001` | suid | `HIGH` | SUID/SGID binary in temporary or user directory | Binary with SUID/SGID in `/tmp/`, `/var/tmp/`, `/dev/shm/`, `/home/`, `/root/` |
+| `PH-SUID-002` | suid | `CRITICAL` | Insecure writable permissions on SUID/SGID binary | SUID/SGID binary is world-writable (`0o002`) or group-writable (`0o020`) |
+| `PH-SUID-003` | suid | `HIGH` | Shell or script interpreter possessing SUID/SGID bits | `bash`, `sh`, `dash`, `zsh`, `python`, `perl`, `ruby`, `busybox`, etc. |
+| `PH-SUID-004` | suid | `MEDIUM` | SUID/SGID binary located in non-standard system directory | SUID/SGID binary residing outside standard system paths (e.g., `/opt/`) |
+| `PH-SUID-005` | suid | `INFO` | Standard system SUID/SGID binary inventory | Standard administrative utility (`/usr/bin/passwd`, `/usr/bin/sudo`, etc.) |
+| `PH-SUID-090` | suid | `INFO` | Unreadable directory during SUID scan | `PermissionError` (diagnostic finding) |
+
+#### Usage Example
+
+```python
+from persisthunt import SuidDetector, Severity
+
+# Initialize detector
+detector = SuidDetector()
+
+# Scan filesystem for SUID/SGID binaries
+findings = detector.scan()
+
+# Inspect high and critical findings
+for finding in findings.filter(lambda f: f.severity in (Severity.HIGH, Severity.CRITICAL)):
+    print(f"[{finding.severity.value}] {finding.id} - {finding.title}")
+    print(f"  Location: {finding.location}")
+    print(f"  Evidence: {finding.evidence}")
+    print(f"  Recommendation: {finding.recommendation}")
+```
+
+#### Example Finding Output
+
+```json
+{
+  "id": "PH-SUID-002",
+  "category": "suid",
+  "severity": "CRITICAL",
+  "title": "Insecure writable permissions on SUID/SGID binary",
+  "description": "Binary at /opt/legacy_tool has SUID/SGID bits set and is world-writable (0o4777). Any local user can overwrite the binary to execute arbitrary code with elevated privileges.",
+  "evidence": "Permissions: 0o4777, Owner: root:root, SUID: True, SGID: False",
+  "location": "/opt/legacy_tool",
+  "recommendation": "Remove write permissions immediately: chmod go-w /opt/legacy_tool."
+}
+```
+
+---
+
 ## Running Tests
 
 Run the full test suite using `pytest`:
@@ -229,3 +296,4 @@ Run the demonstration script:
 ```bash
 python demo.py
 ```
+
