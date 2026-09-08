@@ -5,7 +5,7 @@ import hashlib
 from pathlib import Path
 from typing import Optional, Union, Iterable, List, Set, Tuple
 from persisthunt.findings import Finding, FindingCollection, Severity
-from persisthunt.detectors.base import BaseDetector
+from persisthunt.detectors.base import BaseDetector, safe_read_lines
 
 class SSHDetector(BaseDetector):
     """Detector for Linux SSH persistence mechanisms.
@@ -298,8 +298,7 @@ class SSHDetector(BaseDetector):
             return
 
         try:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
+            lines = safe_read_lines(file_path)
         except PermissionError as e:
             collection.add(Finding(
                 id="PH-SSH-090",
@@ -519,8 +518,7 @@ class SSHDetector(BaseDetector):
 
         for cfg in config_files:
             try:
-                with open(cfg, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()
+                lines = safe_read_lines(cfg)
             except PermissionError as e:
                 collection.add(Finding(
                     id="PH-SSH-090",

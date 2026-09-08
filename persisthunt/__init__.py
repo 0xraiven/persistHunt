@@ -23,10 +23,13 @@ from persisthunt.reporting import (
     TOOL_VERSION,
 )
 
+from persisthunt.cli import main
+
 __version__ = TOOL_VERSION
 
 __all__ = [
     "__version__",
+    "main",
     "Finding",
     "FindingCollection",
     "Severity",
@@ -45,6 +48,7 @@ __all__ = [
     "Reporter",
     "generate_report",
 ]
+
 
 
 

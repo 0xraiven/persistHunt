@@ -4,7 +4,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, Union, Dict, List, Set, Any
 from persisthunt.findings import Finding, FindingCollection, Severity
-from persisthunt.detectors.base import BaseDetector
+from persisthunt.detectors.base import BaseDetector, safe_read_text
 
 @dataclass
 class PasswdEntry:
@@ -184,7 +184,7 @@ class AccountDetector(BaseDetector):
             return entries
 
         try:
-            content = self.passwd_path.read_text(encoding="utf-8", errors="replace")
+            content = safe_read_text(self.passwd_path)
         except PermissionError as e:
             collection.add(Finding(
                 id="PH-ACCT-090",
@@ -234,13 +234,13 @@ class AccountDetector(BaseDetector):
         return entries
 
     def _parse_shadow(self, collection: FindingCollection) -> Dict[str, ShadowEntry]:
-        """Safely parse /etc/shadow without exposing raw password hashes."""
+        """Safely parse /etc/shadow (requires root permissions)."""
         shadow_map: Dict[str, ShadowEntry] = {}
         if not self.shadow_path.exists():
             return shadow_map
 
         try:
-            content = self.shadow_path.read_text(encoding="utf-8", errors="replace")
+            content = safe_read_text(self.shadow_path)
         except PermissionError as e:
             collection.add(Finding(
                 id="PH-ACCT-090",
@@ -305,7 +305,7 @@ class AccountDetector(BaseDetector):
             return group_map
 
         try:
-            content = self.group_path.read_text(encoding="utf-8", errors="replace")
+            content = safe_read_text(self.group_path)
         except (OSError, PermissionError):
             return group_map
 

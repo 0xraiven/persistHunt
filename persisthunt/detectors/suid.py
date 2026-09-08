@@ -129,9 +129,30 @@ class SuidDetector(BaseDetector):
         return collection
 
     def _traverse_directory(
-        self, dir_path: Path, scanned_files: Set[str], collection: FindingCollection
+        self,
+        dir_path: Path,
+        scanned_files: Set[str],
+        collection: FindingCollection,
+        visited_dirs: Optional[Set[Tuple[int, int]]] = None,
+        depth: int = 0,
+        max_depth: int = 15,
     ) -> None:
         """Traverse a directory recursively to discover SUID/SGID files."""
+        if depth > max_depth:
+            return
+
+        if visited_dirs is None:
+            visited_dirs = set()
+
+        try:
+            d_stat = os.stat(dir_path, follow_symlinks=False)
+            dir_key = (d_stat.st_dev, d_stat.st_ino)
+            if dir_key in visited_dirs:
+                return
+            visited_dirs.add(dir_key)
+        except (OSError, PermissionError):
+            pass
+
         try:
             entries = list(os.scandir(dir_path))
         except PermissionError as e:
@@ -165,7 +186,14 @@ class SuidDetector(BaseDetector):
                     # Skip common massive developer / cache directory trees to ensure fast scanning
                     if entry.name in (".git", ".cache", ".cargo", "node_modules", "__pycache__", ".npm"):
                         continue
-                    self._traverse_directory(Path(entry.path), scanned_files, collection)
+                    self._traverse_directory(
+                        Path(entry.path),
+                        scanned_files,
+                        collection,
+                        visited_dirs=visited_dirs,
+                        depth=depth + 1,
+                        max_depth=max_depth,
+                    )
                 elif entry.is_file():
                     # Fast check: only stat and process files with SUID or SGID bits
                     try:

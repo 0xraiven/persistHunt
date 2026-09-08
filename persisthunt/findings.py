@@ -61,6 +61,14 @@ class FindingCollection:
         """Return the number of findings in the collection."""
         return len(self._findings)
 
+    def __len__(self) -> int:
+        """Return the number of findings in the collection."""
+        return len(self._findings)
+
+    def __getitem__(self, index: int) -> Finding:
+        """Access finding by index."""
+        return self._findings[index]
+
     def by_severity(self, severity: Severity) -> List[Finding]:
         """Filter findings by severity."""
         return [f for f in self._findings if f.severity == severity]

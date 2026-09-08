@@ -1,9 +1,10 @@
 import os
 import re
+import stat
 from pathlib import Path
 from typing import Optional, Union, Iterable, List, Set
 from persisthunt.findings import Finding, FindingCollection, Severity
-from persisthunt.detectors.base import BaseDetector
+from persisthunt.detectors.base import BaseDetector, safe_read_lines
 
 class CronDetector(BaseDetector):
     """Detector for Linux cron persistence mechanisms.
@@ -123,8 +124,7 @@ class CronDetector(BaseDetector):
             return
 
         try:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
+            lines = safe_read_lines(file_path)
         except PermissionError as e:
             collection.add(Finding(
                 id="PH-CRON-090",
@@ -305,7 +305,11 @@ class CronDetector(BaseDetector):
                     recommendation="Investigate the origin and purpose of this hidden file."
                 ))
 
-            if not entry.is_file():
+            try:
+                st = entry.stat(follow_symlinks=True)
+                if not stat.S_ISREG(st.st_mode) or st.st_size > 10 * 1024 * 1024:
+                    continue
+            except (OSError, PermissionError):
                 continue
 
             # Audit script contents line-by-line safely

@@ -23,11 +23,12 @@ class ScanReport:
     risk_score: float = 0.0
     risk_report: Optional[RiskReport] = None
     statistics: Dict[str, Any] = field(default_factory=dict)
+    detector_status: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     findings: List[Finding] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert report into a stable, JSON-compatible dictionary."""
-        return {
+        d = {
             "tool": self.tool,
             "version": self.version,
             "timestamp": self.timestamp,
@@ -36,6 +37,9 @@ class ScanReport:
             "statistics": self.statistics,
             "findings": [f.to_dict() for f in self.findings],
         }
+        if self.detector_status:
+            d["detector_status"] = self.detector_status
+        return d
 
     def to_json(self, indent: int = 2) -> str:
         """Serialize report to a stable JSON formatted string."""
@@ -105,6 +109,22 @@ class ScanReport:
                 if f.recommendation:
                     lines.append(f"   Action: {f.recommendation}")
 
+        # Provide detector status if present
+        if self.detector_status:
+            lines.append("")
+            lines.append("=== Detector Status ===")
+            for name, info in sorted(self.detector_status.items()):
+                if isinstance(info, dict):
+                    status_val = str(info.get("status", "successful")).upper()
+                    f_count = info.get("findings_count", 0)
+                    err = info.get("error")
+                    detail = f"{status_val} ({f_count} findings)"
+                    if err:
+                        detail += f" - {err}"
+                else:
+                    detail = str(info).upper()
+                lines.append(f"- {name}: {detail}")
+
         return "\n".join(lines)
 
     def to_html(self) -> str:
@@ -136,6 +156,31 @@ class ScanReport:
 
         rows_content = "".join(finding_rows) if finding_rows else "<tr><td colspan='6' class='empty'>No persistence findings detected.</td></tr>"
 
+        detector_status_html = ""
+        if self.detector_status:
+            cards = []
+            for name, d_info in sorted(self.detector_status.items()):
+                st_val = (d_info.get("status", "successful") if isinstance(d_info, dict) else str(d_info)).lower()
+                f_count = d_info.get("findings_count", 0) if isinstance(d_info, dict) else 0
+                err_msg = d_info.get("error") if isinstance(d_info, dict) else None
+                err_html = f"<div style='font-size:0.75rem; color:var(--crit); margin-top:0.25rem;'>{html.escape(err_msg)}</div>" if err_msg else ""
+                cards.append(f"""
+                <div class="card" style="text-align:left; padding:0.75rem 1rem;">
+                  <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <strong>{html.escape(name)}</strong>
+                    <span class="badge {st_val}">{html.escape(st_val.upper())}</span>
+                  </div>
+                  <small style="margin-top:0.25rem;">{f_count} findings</small>
+                  {err_html}
+                </div>
+                """)
+            detector_status_html = f"""
+            <h2>Audited Detectors ({len(self.detector_status)})</h2>
+            <div class="stats-grid" style="margin-bottom:2rem;">
+              {"".join(cards)}
+            </div>
+            """
+
         return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -160,6 +205,9 @@ class ScanReport:
   .badge.medium {{ background: var(--med); color: #000; }}
   .badge.low {{ background: var(--low); color: #fff; }}
   .badge.info {{ background: var(--info); color: #fff; }}
+  .badge.successful {{ background: #22c55e; color: #000; }}
+  .badge.permission-limited {{ background: #eab308; color: #000; }}
+  .badge.failed {{ background: var(--crit); color: #fff; }}
   .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem; }}
   .card {{ background: var(--card-bg); border: 1px solid var(--border); border-radius: 0.5rem; padding: 1.25rem; text-align: center; }}
   .card .val {{ font-size: 2rem; font-weight: bold; margin: 0.25rem 0; }}
@@ -200,6 +248,8 @@ class ScanReport:
       <div class="val" style="color: var(--med);">{med} / {low}</div>
     </div>
   </div>
+
+  {detector_status_html}
 
   <h2>Discovered Findings ({len(self.findings)})</h2>
   <table>
@@ -255,6 +305,7 @@ class Reporter:
         findings: Union[FindingCollection, Iterable[Finding]],
         host: Optional[str] = None,
         timestamp: Optional[str] = None,
+        detector_status: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> ScanReport:
         """Generate a complete ScanReport from findings."""
         finding_list: List[Finding] = list(findings)
@@ -272,6 +323,11 @@ class Reporter:
             "category_counts": cat_counts,
             "raw_score": risk_rep.raw_score,
         }
+        if detector_status:
+            stats["detector_status"] = {
+                k: (v.get("status", "successful") if isinstance(v, dict) else str(v))
+                for k, v in detector_status.items()
+            }
 
         # Sort findings by severity order (Critical first)
         sorted_findings = list(risk_rep.contributing_findings)
@@ -287,6 +343,7 @@ class Reporter:
             risk_score=risk_rep.score,
             risk_report=risk_rep,
             statistics=stats,
+            detector_status=detector_status or {},
             findings=sorted_findings,
         )
 
@@ -296,7 +353,10 @@ def generate_report(
     host: Optional[str] = None,
     timestamp: Optional[str] = None,
     risk_scorer: Optional[RiskScorer] = None,
+    detector_status: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> ScanReport:
     """Convenience function to generate a ScanReport from findings."""
     reporter = Reporter(risk_scorer=risk_scorer)
-    return reporter.generate(findings, host=host, timestamp=timestamp)
+    return reporter.generate(
+        findings, host=host, timestamp=timestamp, detector_status=detector_status
+    )

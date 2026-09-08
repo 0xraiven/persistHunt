@@ -1,8 +1,10 @@
+import os
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from persisthunt.findings import Finding, FindingCollection, Severity
+from persisthunt.detectors.base import BaseDetector
 from persisthunt.detectors.cron import CronDetector
 from persisthunt.detectors.systemd import SystemdDetector
 from persisthunt.detectors.ssh import SSHDetector
@@ -607,6 +609,93 @@ def demo_stage9_reporting():
         print(f"Report saved to: {saved} ({saved.stat().st_size} bytes)")
 
 
+from persisthunt.cli import main as cli_main, EXIT_SUCCESS, EXIT_THREAT_DETECTED
+
+def demo_stage10_cli():
+    print("\n=== Stage 10: Production CLI Demo ===")
+
+    # 1. Version commands
+    print("\n--- CLI: Version Display ---")
+    cli_main(["version"])
+
+    # 2. Scanning with Category and Severity Filters
+    print("\n--- CLI: Scan with Category Filter (Cron, SSH) & Severity Filter (Medium+) ---")
+    cli_main(["scan", "-c", "cron,ssh", "--severity", "medium"])
+
+    # 3. Machine-Readable JSON Output via CLI
+    print("\n--- CLI: JSON Output Generation (Cron, Quiet) ---")
+    cli_main(["scan", "-c", "cron", "--json", "-q"])
+
+    # 4. Save Report to File via CLI
+    with TemporaryDirectory() as tmpdir:
+        report_file = Path(tmpdir) / "cli_scan_report.json"
+        print(f"\n--- CLI: Saving Scan to File ({report_file.name}) ---")
+        code = cli_main(["scan", "-c", "cron", "-o", str(report_file), "-q"])
+        print(f"Exit code: {code}")
+        if report_file.exists():
+            print(f"Report successfully saved ({report_file.stat().st_size} bytes)")
+
+    print("\nStage 10 CLI demonstration completed.")
+
+
+def demo_stage11_security_and_hardening():
+    print("\n=== Stage 11: Security Testing & Hardening Demo ===")
+
+    # 1. Resource & Special File Protection
+    print("\n--- 1. Special File (FIFO) & Huge File Safety Verification ---")
+    with TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        fifo_path = tmp / "sample_fifo"
+        try:
+            os.mkfifo(fifo_path)
+            from persisthunt.detectors.base import safe_read_lines
+            try:
+                safe_read_lines(fifo_path)
+            except OSError as e:
+                print(f"Protected against FIFO hang: {e}")
+        except (AttributeError, OSError):
+            print("FIFO creation skipped (not supported on this filesystem)")
+
+        huge_file = tmp / "huge_payload.conf"
+        with open(huge_file, "wb") as f:
+            f.seek(12 * 1024 * 1024)  # 12 MB
+            f.write(b"\0")
+        try:
+            from persisthunt.detectors.base import safe_read_text
+            safe_read_text(huge_file)
+        except OSError as e:
+            print(f"Protected against huge file memory exhaustion: {e}")
+
+    # 2. Detector Isolation & Status Tracking Demonstration
+    print("\n--- 2. Detector Isolation & Error Handling ---")
+    from unittest.mock import patch
+
+    class FaultyDetector(BaseDetector):
+        name = "Unstable Third-Party Detector"
+        detector_id = "faulty"
+        def scan(self):
+            raise RuntimeError("Database connection timed out during persistence audit")
+
+    class HealthyDetector(BaseDetector):
+        name = "Stable Cron Detector"
+        detector_id = "healthy"
+        def scan(self):
+            c = FindingCollection()
+            c.add(Finding("PH-TEST-001", "healthy", Severity.LOW, "Benign Warning", "Normal check"))
+            return c
+
+    mock_registry = {
+        "faulty": FaultyDetector,
+        "healthy": HealthyDetector,
+    }
+
+    with patch.dict("persisthunt.cli.DETECTOR_REGISTRY", mock_registry, clear=True):
+        print("Running scan with isolated faulty and healthy detectors:")
+        cli_main(["scan", "-q"])
+
+    print("\nStage 11 Security & Hardening demonstration completed.")
+
+
 def main():
     demo_stage1_findings()
     demo_stage2_cron_detector()
@@ -617,9 +706,12 @@ def main():
     demo_stage7_process_and_account_detectors()
     demo_stage8_risk_scoring()
     demo_stage9_reporting()
+    demo_stage10_cli()
+    demo_stage11_security_and_hardening()
 
 if __name__ == "__main__":
     main()
+
 
 
 

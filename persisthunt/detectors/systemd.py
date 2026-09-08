@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 from typing import Optional, Union, Iterable, List, Set, Dict, Tuple
 from persisthunt.findings import Finding, FindingCollection, Severity
-from persisthunt.detectors.base import BaseDetector
+from persisthunt.detectors.base import BaseDetector, safe_read_lines
 
 class SystemdDetector(BaseDetector):
     """Detector for Linux systemd persistence mechanisms.
@@ -239,8 +239,7 @@ class SystemdDetector(BaseDetector):
     ) -> None:
         """Parse and audit a single systemd unit file."""
         try:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
+            lines = safe_read_lines(file_path)
         except PermissionError as e:
             collection.add(Finding(
                 id="PH-SYSTEMD-090",

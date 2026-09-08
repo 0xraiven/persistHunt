@@ -573,6 +573,106 @@ report.save_html("audit_report.html")
 
 ---
 
+### Stage 10: Command-Line Interface (CLI)
+
+Stage 10 introduces the production command-line interface for PersistHunt (`persisthunt` / `python -m persisthunt`).
+
+#### CLI Commands
+
+| Command | Description |
+|---|---|
+| `persisthunt scan` | Run full system audit across all detectors and print terminal summary |
+| `persisthunt scan --json` | Output scan results in machine-readable JSON format |
+| `persisthunt scan --category cron` | Audit only cron persistence |
+| `persisthunt scan -c cron,systemd,ssh` | Audit multiple comma-separated categories |
+| `persisthunt scan --severity high` | Filter findings to only HIGH and CRITICAL severities |
+| `persisthunt scan -o report.json` | Save scan report to JSON file |
+| `persisthunt scan -o report.html` | Save scan report to self-contained HTML file |
+| `persisthunt scan --exit-zero` | Return exit code 0 even if HIGH or CRITICAL threats are found |
+| `persisthunt version` / `persisthunt -V` | Display PersistHunt version |
+| `persisthunt --help` / `persisthunt scan --help` | Show command documentation and options |
+
+#### Command-Line Options (`persisthunt scan`)
+
+| Flag | Description |
+|---|---|
+| `--json` | Output scan results in machine-readable JSON to `stdout` |
+| `-c`, `--category` | Filter detector execution by category (`cron`, `systemd`, `ssh`, `shell`, `suid`, `process`, `account`, or `all`). Can be repeated or comma-separated. |
+| `-s`, `--severity` | Minimum severity threshold filter (`info`, `low`, `medium`, `high`, `critical`) |
+| `-o`, `--output` | Save report to specified file path (`.json` or `.html` extension) |
+| `-q`, `--quiet` | Suppress scan progress messages on `stderr` |
+| `--exit-zero` | Enforce exit code 0 regardless of threats detected (useful for non-blocking CI) |
+| `--root-prefix` | Target filesystem root prefix for offline container, disk image, or forensic mount inspection |
+
+#### Exit Codes
+
+| Code | Constant | Meaning |
+|---|---|---|
+| `0` | `EXIT_SUCCESS` | Scan completed successfully with no HIGH or CRITICAL threats detected (or `--exit-zero` used). |
+| `1` | `EXIT_ERROR` | Operational error (e.g. invalid arguments or bad category name). |
+| `2` | `EXIT_THREAT_DETECTED` | Scan completed and detected one or more HIGH or CRITICAL persistence threats. |
+
+#### Stream Separation & Scripting
+
+The CLI cleanly separates progress indicators and diagnostic messages from structured output:
+- **`stderr`**: Progress updates (e.g. `[+] Scanning cron persistence...`) and operational error warnings.
+- **`stdout`**: Scan reports (Terminal summary or JSON).
+
+This guarantees that standard Unix piping works seamlessly without corrupting stdout streams:
+
+```bash
+# Pipe pure JSON directly to jq
+persisthunt scan --json -q | jq '.findings[] | select(.severity == "CRITICAL")'
+
+# Run in CI/CD pipeline and block builds on threats
+persisthunt scan --severity high
+if [ $? -eq 2 ]; then
+    echo "High-severity persistence threats detected! Failing build."
+    exit 1
+fi
+```
+
+---
+
+### Stage 11: Security Testing and Hardening
+
+Stage 11 enforces comprehensive security, reliability, safety verification, detector isolation, and resource protection across the framework.
+
+#### Safety Guarantees
+
+PersistHunt adheres to strict read-only and non-interfering operational rules:
+
+1. **Zero Command Execution**: PersistHunt never executes discovered commands, scripts, binaries, or suspicious payloads (`subprocess`, `os.system`, `os.popen`, `exec`, and `eval` are never invoked on inspected artifacts).
+2. **Zero Filesystem or State Modifications**: PersistHunt never alters permissions (`chmod`), ownership (`chown`), persistence configurations, accounts, passwords, or systemd services. Discovered files are never deleted or modified.
+3. **Zero External Network Transmissions**: PersistHunt never initiates outbound network connections or transmits telemetry/credentials. All scans are purely local and offline-safe.
+4. **Secret & Credential Masking**: Password hashes (`/etc/shadow`), private SSH keys, and command-line authorization tokens are automatically sanitized or redacted before being recorded in findings.
+
+#### Detector Isolation & Fault Tolerance
+
+Detectors run with process-level isolation in the audit engine. A fatal exception or unhandled crash in one detector will never abort the remaining audit:
+
+- Individual detector outcomes are tracked and reported in terminal summaries, JSON reports, and HTML badges:
+  - **`successful`**: Detector executed completely without unhandled errors or permission restrictions.
+  - **`permission-limited`**: Detector encountered permission barriers on one or more inspection paths (e.g. unprivileged user inspecting `/root/.ssh` or `/etc/shadow`), recording non-fatal diagnostic findings (`PH-*-090`).
+  - **`failed`**: Detector experienced an unexpected runtime failure. The error is safely caught and logged without compromising the broader scan.
+
+#### Filesystem & Resource Hardening
+
+- **Special File / FIFO Protection**: Configuration readers verify `stat.S_ISREG` before opening files, preventing hangs or deadlocks caused by named pipes (`mkfifo`), character devices, or UNIX domain sockets placed in persistence paths.
+- **Huge File & DoS Prevention**: Enforces a strict 10 MB maximum file size ceiling on configuration and startup scripts (`safe_read_lines`, `safe_read_text`), preventing memory exhaustion or denial-of-service attacks.
+- **Circular Symlink & Traversal Bounds**: The SUID/SGID traversal engine enforces cycle detection using `(st_dev, st_ino)` tracking and a maximum recursion depth of 15, preventing infinite loops or runaway filesystem traversal.
+- **Untrusted Character Handling**: Unicode filenames with emojis, non-ASCII characters, null bytes, and control characters are normalized with `errors="replace"` and serialized safely in JSON reports.
+
+#### Safety Limitations
+
+While PersistHunt provides extensive persistence detection, operators should understand the following boundaries:
+
+- **Privilege Boundaries**: Unprivileged scans (`non-root`) cannot audit restricted files such as `/etc/shadow`, `/root/.ssh`, or user crontabs belonging to other accounts. For complete system visibility, run PersistHunt with root privileges.
+- **Kernel-Level Persistence**: PersistHunt audits userland configurations, filesystem structures, and process trees. Kernel-level persistence (such as direct kernel memory tampering or malicious loadable kernel modules) requires dedicated kernel integrity or eBPF tooling.
+- **Forensic Environment**: For offline container or disk image analysis, use the `--root-prefix` parameter to target mounted forensic images without risking interaction with the live host.
+
+---
+
 ## Running Tests
 
 Run the full test suite using `pytest`:

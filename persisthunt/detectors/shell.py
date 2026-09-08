@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 from typing import Optional, Union, Iterable, List, Set
 from persisthunt.findings import Finding, FindingCollection, Severity
-from persisthunt.detectors.base import BaseDetector
+from persisthunt.detectors.base import BaseDetector, safe_read_lines
 
 class ShellDetector(BaseDetector):
     """Detector for Linux shell startup persistence mechanisms.
@@ -254,25 +254,21 @@ class ShellDetector(BaseDetector):
 
         # Read file contents safely
         try:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                # Check for binary content in the first 1KB
-                header = f.read(1024)
-                if "\x00" in header:
-                    # Binary file in startup location
-                    collection.add(Finding(
-                        id="PH-SHELL-004",
-                        category="shell",
-                        severity=Severity.HIGH,
-                        title="Binary executable found in shell startup location",
-                        description=f"Startup file {file_path} contains binary content. Shell startup files must be plaintext shell scripts.",
-                        evidence=f"File: {file_path.name}",
-                        location=str(file_path),
-                        recommendation="Investigate why a binary file is placed in this shell initialization path."
-                    ))
-                    return
-
-                f.seek(0)
-                lines = f.readlines()
+            lines = safe_read_lines(file_path)
+            content_sample = "".join(lines[:20])
+            if "\x00" in content_sample:
+                # Binary file in startup location
+                collection.add(Finding(
+                    id="PH-SHELL-004",
+                    category="shell",
+                    severity=Severity.HIGH,
+                    title="Binary executable found in shell startup location",
+                    description=f"Startup file {file_path} contains binary content. Shell startup files must be plaintext shell scripts.",
+                    evidence=f"File: {file_path.name}",
+                    location=str(file_path),
+                    recommendation="Investigate why a binary file is placed in this shell initialization path."
+                ))
+                return
         except PermissionError as e:
             collection.add(Finding(
                 id="PH-SHELL-090",
