@@ -14,13 +14,13 @@ The finding engine provides a standardized representation for security findings.
 
 A `Finding` represents a single security issue detected on the system:
 
-- `id`: A unique identifier for the finding type (e.g., `PH-CRON-001`, `PH-SYSTEMD-001`).
-- `category`: The security category (e.g., `cron`, `systemd`).
+- `id`: A unique identifier for the finding type (e.g., `PH-CRON-001`, `PH-SYSTEMD-001`, `PH-SSH-001`).
+- `category`: The security category (e.g., `cron`, `systemd`, `ssh`).
 - `severity`: Severity level, one of `Severity` enum values (`INFO`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
 - `title`: Short human-readable summary.
 - `description`: Detailed explanation of the detected condition.
 - `evidence`: (Optional) The raw line, file reference, or diagnostic triggering detection.
-- `location`: (Optional) The filesystem path and line number (e.g., `/etc/systemd/system/updater.service:4`).
+- `location`: (Optional) The filesystem path and line number (e.g., `/home/victim/.ssh/authorized_keys:1`).
 - `recommendation`: (Optional) Actionable remediation advice.
 
 #### Available Severity Levels
@@ -99,14 +99,6 @@ The detector inspects:
 - **Packaged vendor units**: `/usr/lib/systemd/system/` and `/lib/systemd/system/`
 - **User-level units**: `~/.config/systemd/user/`, `/etc/systemd/user/`, `/usr/lib/systemd/user/`
 
-#### Safe Unit Parsing
-
-- **Pure Read-Only**: Unit files are read as text data without executing any directives.
-- **Directive Awareness**: Audits `ExecStart`, `ExecStartPre`, `ExecStartPost`, `ExecReload`, `ExecStop`, and `ExecStopPost`.
-- **Systemd Prefix Handling**: Safely parses command lines with systemd execution modifiers (`-`, `@`, `+`, `!`, `!!`, `:`).
-- **Line Continuation**: Supports multi-line directives with backslash line continuations (`\`).
-- **Permissions Audit**: Flags world-writable system unit files (`chmod 666`/`777`) that present local privilege escalation vulnerabilities.
-
 #### Indicator Rules & Finding IDs (Systemd)
 
 | Finding ID | Category | Severity | Description | Indicators |
@@ -122,27 +114,50 @@ The detector inspects:
 | `PH-SYSTEMD-091` | systemd | `LOW` | Broken symlink in unit directory | Target unit missing in `*.wants` or service link |
 | `PH-SYSTEMD-092` | systemd | `LOW` | Malformed systemd unit directive | Line does not follow standard `Key=Value` syntax |
 
-#### Safety Model
+---
 
-PersistHunt adheres strictly to non-invasive, auditing-only operation:
-- **No Service Management**: Never calls `systemctl start`, `stop`, `enable`, `disable`, or `daemon-reload`.
-- **No Command Execution**: Never executes commands defined in `Exec*` directives.
-- **No File Modifications**: Never creates, alters, or removes unit files or symlinks.
-- **No Privilege Escalation**: Respects Linux permissions and records diagnostic findings when access is restricted.
+### Stage 4: SSH Persistence Detection
+
+Stage 4 introduces `SSHDetector` (`persisthunt.detectors.ssh`), auditing SSH authentication keys, key options, filesystem permissions, and daemon configurations for persistence mechanisms.
+
+#### Supported Locations
+
+The detector inspects:
+- **Root authorized keys**: `/root/.ssh/authorized_keys`, `/root/.ssh/authorized_keys2`
+- **User authorized keys**: `/home/*/.ssh/authorized_keys`, `/home/*/.ssh/authorized_keys2`
+- **Service account homes**: `/var/www/.ssh/`, `/var/lib/*/.ssh/`, `/srv/.ssh/`
+- **SSH daemon configuration**: `/etc/ssh/sshd_config`, `/etc/ssh/sshd_config.d/*.conf`
+
+#### Credential Protection & Safe Fingerprinting
+
+- **No Private Key Disclosure**: The detector never prints or collects private key material. If private keys are accidentally placed in `authorized_keys`, the evidence is redacted (`[REDACTED PRIVATE KEY MATERIAL]`).
+- **OpenSSH-Compatible Fingerprints**: Public keys are SHA256 fingerprinted (`SHA256:...`) rather than dumping complete base64 key material.
+- **Strict Read-Only**: Never alters keys or daemon configs, never restarts services, and never initiates network connections.
+
+#### Indicator Rules & Finding IDs (SSH)
+
+| Finding ID | Category | Severity | Description | Indicators |
+|---|---|---|---|---|
+| `PH-SSH-001` | ssh | `LOW` | Root authorized keys present | Presence of active authorized keys allowing direct root SSH login |
+| `PH-SSH-002` | ssh | `HIGH` / `MEDIUM` | Forced command in authorized key | `command="..."` option enforcing execution; `HIGH` if matching suspicious indicators (`/tmp`, `curl`, reverse shell) |
+| `PH-SSH-003` | ssh | `HIGH` | Service account authorized keys | Non-login daemon accounts (`www-data`, `nobody`, `apache`) with SSH keys |
+| `PH-SSH-004` | ssh | `HIGH` / `MEDIUM` | Insecure permissions on SSH path | World-writable (`HIGH`) or group-writable (`MEDIUM`) `.ssh/` or `authorized_keys` |
+| `PH-SSH-005` | ssh | `HIGH` | Private key material in authorized keys | Private key header found inside authorized_keys file (redacted) |
+| `PH-SSH-006` | ssh | `HIGH` / `MEDIUM` | Dangerous SSH daemon configuration | `PermitEmptyPasswords yes` (`HIGH`), `AuthorizedKeysFile /tmp/...` (`HIGH`), `PermitRootLogin yes` (`MEDIUM`), `AuthorizedKeysCommand` (`MEDIUM`) |
+| `PH-SSH-090` | ssh | `INFO` | Unreadable SSH location | `PermissionError` (diagnostic finding) |
+| `PH-SSH-091` | ssh | `LOW` | Broken symlink in SSH directory | Symlink pointing to missing key target |
+| `PH-SSH-092` | ssh | `LOW` | Malformed authorized_keys line | Line fails OpenSSH public key syntax |
 
 #### Usage Example
 
 ```python
-from persisthunt import SystemdDetector, Severity
+from persisthunt import SSHDetector, Severity
 
 # Initialize and scan
-detector = SystemdDetector()
+detector = SSHDetector()
 findings = detector.scan()
 
-# Filter and analyze
-print(f"Total findings: {findings.count()}")
-print(f"Severity breakdown: {findings.severity_counts()}")
-
+# Inspect high-severity SSH findings
 for finding in findings.by_severity(Severity.HIGH):
     print(f"[{finding.id}] {finding.title}")
     print(f"  Location: {finding.location}")
@@ -154,14 +169,14 @@ for finding in findings.by_severity(Severity.HIGH):
 
 ```json
 {
-  "id": "PH-SYSTEMD-003",
-  "category": "systemd",
+  "id": "PH-SSH-002",
+  "category": "ssh",
   "severity": "HIGH",
-  "title": "Executable or script in temporary directory in systemd unit",
-  "description": "ExecStart references or executes binaries from world-writable directories (/tmp, /var/tmp, /dev/shm). Attackers frequently stage persistence payloads in these locations.",
-  "evidence": "/tmp/backdoor_daemon",
-  "location": "/etc/systemd/system/backdoor.service:5",
-  "recommendation": "Ensure service binaries are installed in standard protected directories (e.g. /usr/bin, /usr/local/bin) owned by root."
+  "title": "Suspicious forced command in SSH authorized key",
+  "description": "Authorized key enforces execution of command containing suspicious characteristics: temporary directory path (/tmp, /var/tmp, /dev/shm).",
+  "evidence": "Type: ssh-ed25519, Fingerprint: SHA256:cnhDmnStakz6XP3eUC+xFez4mfrj6tCgP3NcCO3yKRQ, Comment: evil@remote, Options: command=\"/tmp/backdoor.sh\",no-pty",
+  "location": "/home/victim/.ssh/authorized_keys:1",
+  "recommendation": "Review the forced command immediately and revoke the key if unauthorized."
 }
 ```
 

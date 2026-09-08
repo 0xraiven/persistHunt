@@ -1,7 +1,7 @@
 """PersistHunt core package."""
 
 from persisthunt.findings import Finding, FindingCollection, Severity
-from persisthunt.detectors import BaseDetector, CronDetector, SystemdDetector
+from persisthunt.detectors import BaseDetector, CronDetector, SystemdDetector, SSHDetector
 
 __all__ = [
     "Finding",
@@ -10,4 +10,5 @@ __all__ = [
     "BaseDetector",
     "CronDetector",
     "SystemdDetector",
+    "SSHDetector",
 ]
