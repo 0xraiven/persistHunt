@@ -11,6 +11,11 @@ from persisthunt.detectors import (
     ProcessDetector,
     AccountDetector,
 )
+from persisthunt.risk import (
+    RiskScorer,
+    RiskReport,
+    calculate_risk,
+)
 
 __all__ = [
     "Finding",
@@ -24,5 +29,9 @@ __all__ = [
     "SuidDetector",
     "ProcessDetector",
     "AccountDetector",
+    "RiskScorer",
+    "RiskReport",
+    "calculate_risk",
 ]
+
 

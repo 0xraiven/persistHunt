@@ -366,6 +366,98 @@ for finding in findings.filter(lambda f: f.severity in (Severity.HIGH, Severity.
 
 ---
 
+### Stage 8: Risk Scoring Engine
+
+Stage 8 implements the deterministic, explainable, and detector-independent risk-scoring engine (`RiskScorer`, `RiskReport`, and `calculate_risk`).
+
+#### Mathematical Model & Severity Weights
+
+The scoring engine aggregates findings without naive averaging (which would artificially dilute severe threats when many benign or informational findings exist) and without unbounded sums:
+
+##### Severity Weights
+
+| Severity Level | Weight | Description |
+|---|---|---|
+| `INFO` | `0` | Informational or diagnostic observations |
+| `LOW` | `1` | Minor anomalies or configuration warnings |
+| `MEDIUM` | `3` | Suspicious characteristics or non-standard paths |
+| `HIGH` | `6` | Strong indicators of persistence or reverse shells |
+| `CRITICAL` | `10` | High-impact backdoors, UID 0 accounts, writable SUID |
+
+##### Aggregation Formula
+
+$$\text{Raw Score} = \sum_{f \in \text{findings}} \text{Weight}(f.\text{severity})$$
+
+$$\text{Risk Score} = \min\left(10.0, \text{round}\left(\frac{\text{Raw Score}}{\text{divisor}}, 1\right)\right) \quad (\text{default } \text{divisor} = 5.0)$$
+
+For example, a security audit discovering:
+- 1 Critical (10 pts)
+- 2 High (12 pts)
+- 4 Medium (12 pts)
+- 3 Low (3 pts)
+- 1 Info (0 pts)
+
+Yields a raw score of $10 + 12 + 12 + 3 + 0 = 37.0$.
+$$\text{Risk Score} = \frac{37.0}{5.0} = 7.4 / 10.0$$
+
+#### Output & Explainability
+
+`RiskReport` exposes the overall score, severity counts, highest severity, raw score, breakdown by severity, and prioritized list of contributing findings:
+
+##### Formatted Summary (`report.summary()`)
+
+```text
+Risk Score: 7.4/10
+
+Critical: 1
+High: 2
+Medium: 4
+Low: 3
+Info: 1
+```
+
+##### Detailed Explanation (`report.explain()`)
+
+```text
+=== Risk Score Explanation ===
+Overall Risk Score: 7.4 / 10 (Raw Weight: 37.0)
+Total Findings: 11
+Highest Severity Detected: CRITICAL
+
+Severity Breakdown:
+  - CRITICAL:  1 finding(s) x 10.0 weight =  10.0 pts
+  - HIGH    :  2 finding(s) x  6.0 weight =  12.0 pts
+  - MEDIUM  :  4 finding(s) x  3.0 weight =  12.0 pts
+  - LOW     :  3 finding(s) x  1.0 weight =   3.0 pts
+  - INFO    :  1 finding(s) x  0.0 weight =   0.0 pts
+
+Top Contributing Findings:
+  1. [CRITICAL] PH-ACCT-001 - Non-root user account with UID 0 at /etc/passwd:toor
+  ...
+```
+
+#### Usage Example
+
+```python
+from persisthunt import CronDetector, SystemdDetector, calculate_risk
+
+# Collect findings across detectors
+findings = CronDetector().scan()
+findings.extend(SystemdDetector().scan())
+
+# Calculate risk report
+report = calculate_risk(findings)
+
+# Print standard summary
+print(report.summary())
+
+# Access structured attributes
+print(f"Overall Score: {report.score}/{report.max_score}")
+print(f"Highest Severity: {report.highest_severity}")
+```
+
+---
+
 ## Running Tests
 
 Run the full test suite using `pytest`:

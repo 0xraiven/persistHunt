@@ -10,6 +10,7 @@ from persisthunt.detectors.shell import ShellDetector
 from persisthunt.detectors.suid import SuidDetector
 from persisthunt.detectors.process import ProcessDetector
 from persisthunt.detectors.account import AccountDetector
+from persisthunt.risk import RiskScorer, RiskReport, calculate_risk
 
 def demo_stage1_findings():
     print("=== Stage 1: Finding Model & Collection Demo ===")
@@ -477,6 +478,73 @@ def demo_stage7_process_and_account_detectors():
         print(json.dumps(mock_acct_findings.to_dict(), indent=2))
 
 
+def demo_stage8_risk_scoring():
+    print("\n=== Stage 8: Risk Scoring Engine Demo ===")
+
+    # 1. Verification of the user-specified mixed severity scenario
+    print("\n--- Scenario A: Standard Mixed-Severity Profile ---")
+    collection = FindingCollection()
+    collection.add(Finding(
+        id="PH-CRIT-001", category="account", severity=Severity.CRITICAL,
+        title="Secondary UID 0 Backdoor Account", description="Account 'toor' has UID 0.",
+        location="/etc/passwd:toor"
+    ))
+    for i in range(2):
+        collection.add(Finding(
+            id=f"PH-HIGH-{i+1:03d}", category="process", severity=Severity.HIGH,
+            title=f"High severity issue {i+1}", description="Suspicious process/startup issue.",
+            location=f"PID {1000+i}"
+        ))
+    for i in range(4):
+        collection.add(Finding(
+            id=f"PH-MED-{i+1:03d}", category="cron", severity=Severity.MEDIUM,
+            title=f"Medium severity issue {i+1}", description="Unusual scheduling/path issue.",
+            location=f"/etc/cron.d/job{i+1}"
+        ))
+    for i in range(3):
+        collection.add(Finding(
+            id=f"PH-LOW-{i+1:03d}", category="systemd", severity=Severity.LOW,
+            title=f"Low severity issue {i+1}", description="Minor configuration warning.",
+            location=f"/etc/systemd/system/svc{i+1}.service"
+        ))
+    collection.add(Finding(
+        id="PH-INFO-001", category="general", severity=Severity.INFO,
+        title="Informational diagnostic observation", description="Standard diagnostic notice."
+    ))
+
+    report = calculate_risk(collection)
+    print("Formatted Summary Output:")
+    print(report.summary())
+
+    print("\nDetailed Explainability Breakdown:")
+    print(report.explain())
+
+    # 2. Aggregated Live System Risk Assessment across all 6 Detectors
+    print("\n--- Scenario B: Aggregated Live Host System Risk Audit ---")
+    detectors = [
+        CronDetector(),
+        SystemdDetector(),
+        SSHDetector(),
+        ShellDetector(),
+        SuidDetector(),
+        ProcessDetector(),
+        AccountDetector(),
+    ]
+
+    all_host_findings = FindingCollection()
+    for d in detectors:
+        findings = d.scan()
+        for f in findings:
+            all_host_findings.add(f)
+
+    host_report = calculate_risk(all_host_findings)
+    print(f"Total Host Findings Collected: {host_report.finding_count}")
+    print(f"Overall Host Risk Score: {host_report.score:.1f} / {host_report.max_score:.0f}")
+    print(f"Highest Severity Present: {host_report.highest_severity.value if host_report.highest_severity else 'None'}")
+    print("\nHost Summary Report:")
+    print(host_report.summary())
+
+
 def main():
     demo_stage1_findings()
     demo_stage2_cron_detector()
@@ -485,7 +553,9 @@ def main():
     demo_stage5_shell_detector()
     demo_stage6_suid_detector()
     demo_stage7_process_and_account_detectors()
+    demo_stage8_risk_scoring()
 
 if __name__ == "__main__":
     main()
+
 
