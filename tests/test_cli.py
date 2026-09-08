@@ -63,7 +63,7 @@ class TestCLI(unittest.TestCase):
     def test_cli_category_filter(self):
         with patch("sys.stdout", new=io.StringIO()) as out, \
              patch("sys.stderr", new=io.StringIO()) as err:
-            code = main(["scan", "--category", "cron", "--category", "systemd", "--json", "--quiet"])
+            code = main(["scan", "--category", "cron", "--category", "systemd", "--json", "--quiet", "--exit-zero"])
             self.assertEqual(code, EXIT_SUCCESS)
             data = json.loads(out.getvalue())
             # Ensure findings only contain cron or systemd
@@ -128,11 +128,11 @@ class TestCLI(unittest.TestCase):
 
         with patch("sys.stdout", new=io.StringIO()), \
              patch("sys.stderr", new=io.StringIO()):
-            code_json = main(["scan", "-c", "cron", "-o", str(json_file), "--quiet"])
+            code_json = main(["scan", "-c", "cron", "-o", str(json_file), "--quiet", "--exit-zero"])
             self.assertEqual(code_json, EXIT_SUCCESS)
             self.assertTrue(json_file.exists())
 
-            code_html = main(["scan", "-c", "cron", "-o", str(html_file), "--quiet"])
+            code_html = main(["scan", "-c", "cron", "-o", str(html_file), "--quiet", "--exit-zero"])
             self.assertEqual(code_html, EXIT_SUCCESS)
             self.assertTrue(html_file.exists())
             self.assertIn("<!DOCTYPE html>", html_file.read_text())

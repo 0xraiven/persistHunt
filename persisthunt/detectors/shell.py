@@ -151,7 +151,12 @@ class ShellDetector(BaseDetector):
         self._scan_user_home(self.root_home_dir, scanned_files, collection)
 
         # 4. Audit /home/* user startup files
-        if self.home_dir.exists():
+        try:
+            home_exists = self.home_dir.exists()
+        except (OSError, PermissionError):
+            home_exists = False
+
+        if home_exists:
             try:
                 user_dirs = list(os.scandir(self.home_dir))
             except PermissionError as e:
@@ -175,8 +180,11 @@ class ShellDetector(BaseDetector):
 
         # 5. Audit current user home if running without root_prefix and home_dir was not explicitly configured
         if self.root_prefix is None and not self._explicit_home_dir:
-            current_home = Path.home()
-            self._scan_user_home(current_home, scanned_files, collection)
+            try:
+                current_home = Path.home()
+                self._scan_user_home(current_home, scanned_files, collection)
+            except (OSError, PermissionError):
+                pass
 
         # 6. Audit any explicitly configured custom files
         for c_file in self.custom_files:
@@ -188,7 +196,22 @@ class ShellDetector(BaseDetector):
         self, dir_path: Path, scanned_files: Set[str], collection: FindingCollection
     ) -> None:
         """Inspect a profile drop-in directory such as /etc/profile.d."""
-        if not dir_path.exists():
+        try:
+            if not dir_path.exists():
+                return
+        except PermissionError as e:
+            collection.add(Finding(
+                id="PH-SHELL-090",
+                category="shell",
+                severity=Severity.INFO,
+                title="Unreadable profile directory (permission denied)",
+                description=f"Permission was denied when listing {dir_path}.",
+                evidence=str(e),
+                location=str(dir_path),
+                recommendation="Run PersistHunt with elevated permissions if complete auditing is required."
+            ))
+            return
+        except OSError:
             return
 
         try:
@@ -210,7 +233,13 @@ class ShellDetector(BaseDetector):
 
         for entry in entries:
             entry_path = Path(entry.path)
-            if entry.is_symlink() and not entry_path.exists():
+            is_broken = False
+            if entry.is_symlink():
+                try:
+                    is_broken = not entry_path.exists()
+                except (OSError, PermissionError):
+                    is_broken = False
+            if is_broken:
                 collection.add(Finding(
                     id="PH-SHELL-091",
                     category="shell",
@@ -230,7 +259,22 @@ class ShellDetector(BaseDetector):
         self, home_path: Path, scanned_files: Set[str], collection: FindingCollection
     ) -> None:
         """Inspect shell startup files inside a user home directory."""
-        if not home_path.exists():
+        try:
+            if not home_path.exists():
+                return
+        except PermissionError as e:
+            collection.add(Finding(
+                id="PH-SHELL-090",
+                category="shell",
+                severity=Severity.INFO,
+                title="Unreadable user home directory (permission denied)",
+                description=f"Permission was denied when accessing {home_path}.",
+                evidence=str(e),
+                location=str(home_path),
+                recommendation="Run PersistHunt with elevated permissions if complete user auditing is required."
+            ))
+            return
+        except OSError:
             return
 
         for fname in self.USER_STARTUP_FILENAMES:
@@ -241,10 +285,29 @@ class ShellDetector(BaseDetector):
         self, file_path: Path, scanned_files: Set[str], collection: FindingCollection
     ) -> None:
         """Audit a single shell startup file if it exists and has not been scanned."""
-        if not file_path.exists():
+        try:
+            if not file_path.exists():
+                return
+        except PermissionError as e:
+            collection.add(Finding(
+                id="PH-SHELL-090",
+                category="shell",
+                severity=Severity.INFO,
+                title="Unreadable shell startup file (permission denied)",
+                description=f"Permission was denied when accessing {file_path}.",
+                evidence=str(e),
+                location=str(file_path),
+                recommendation="Run PersistHunt with elevated permissions if complete auditing is required."
+            ))
+            return
+        except OSError:
             return
 
-        canonical = str(file_path.resolve()) if file_path.exists() else str(file_path)
+        try:
+            canonical = str(file_path.resolve())
+        except (OSError, PermissionError):
+            canonical = str(file_path)
+
         if canonical in scanned_files:
             return
         scanned_files.add(canonical)

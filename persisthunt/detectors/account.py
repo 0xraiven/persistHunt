@@ -171,16 +171,32 @@ class AccountDetector(BaseDetector):
     def _parse_passwd(self, collection: FindingCollection) -> List[PasswdEntry]:
         """Safely parse /etc/passwd."""
         entries: List[PasswdEntry] = []
-        if not self.passwd_path.exists():
+        try:
+            if not self.passwd_path.exists():
+                collection.add(Finding(
+                    id="PH-ACCT-090",
+                    category="account",
+                    severity=Severity.INFO,
+                    title="Account passwd database not found",
+                    description=f"Passwd database file not found at {self.passwd_path}.",
+                    evidence="FileNotFoundError",
+                    location=str(self.passwd_path),
+                    recommendation="Ensure /etc/passwd exists."
+                ))
+                return entries
+        except PermissionError as e:
             collection.add(Finding(
                 id="PH-ACCT-090",
                 category="account",
                 severity=Severity.INFO,
-                title="Account passwd database not found",
-                description=f"Passwd database file not found at {self.passwd_path}.",
+                title="Permission denied reading passwd database",
+                description=f"Could not access passwd file at {self.passwd_path} (requires elevated privileges).",
+                evidence=str(e),
                 location=str(self.passwd_path),
-                recommendation="Verify system account configuration."
+                recommendation="Run PersistHunt with elevated permissions if complete account auditing is required."
             ))
+            return entries
+        except OSError:
             return entries
 
         try:
@@ -236,7 +252,20 @@ class AccountDetector(BaseDetector):
     def _parse_shadow(self, collection: FindingCollection) -> Dict[str, ShadowEntry]:
         """Safely parse /etc/shadow (requires root permissions)."""
         shadow_map: Dict[str, ShadowEntry] = {}
-        if not self.shadow_path.exists():
+        try:
+            if not self.shadow_path.exists():
+                return shadow_map
+        except (PermissionError, OSError):
+            collection.add(Finding(
+                id="PH-ACCT-090",
+                category="account",
+                severity=Severity.INFO,
+                title="Permission denied reading shadow database",
+                description=f"Could not read shadow file at {self.shadow_path} (requires elevated privileges).",
+                evidence="PermissionError: [Errno 13] Permission denied",
+                location=str(self.shadow_path),
+                recommendation="Run PersistHunt as root to inspect password aging and hash status."
+            ))
             return shadow_map
 
         try:
@@ -301,7 +330,10 @@ class AccountDetector(BaseDetector):
     def _parse_group(self, collection: FindingCollection) -> Dict[str, Set[str]]:
         """Parse /etc/group to map group names to members."""
         group_map: Dict[str, Set[str]] = {}
-        if not self.group_path.exists():
+        try:
+            if not self.group_path.exists():
+                return group_map
+        except (OSError, PermissionError):
             return group_map
 
         try:

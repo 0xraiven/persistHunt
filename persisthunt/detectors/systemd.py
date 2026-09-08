@@ -84,7 +84,11 @@ class SystemdDetector(BaseDetector):
             else:
                 # When testing with root_prefix, check for home/*/.config/systemd/user
                 home_base = self.root_prefix / "home"
-                if home_base.exists():
+                try:
+                    home_exists = home_base.exists()
+                except (OSError, PermissionError):
+                    home_exists = False
+                if home_exists:
                     try:
                         for u_home in home_base.iterdir():
                             user_cfg = u_home / ".config" / "systemd" / "user"
@@ -126,7 +130,11 @@ class SystemdDetector(BaseDetector):
 
         # 3. Scan any explicitly configured unit paths
         for c_path in self.custom_unit_paths:
-            if c_path.exists() and str(c_path) not in scanned_files:
+            try:
+                c_exists = c_path.exists()
+            except (OSError, PermissionError):
+                c_exists = False
+            if c_exists and str(c_path) not in scanned_files:
                 scanned_files.add(str(c_path))
                 self._audit_unit_file(c_path, is_user_unit=False, collection=collection)
 
@@ -140,7 +148,22 @@ class SystemdDetector(BaseDetector):
         collection: FindingCollection,
     ) -> None:
         """Inspect a directory containing systemd unit files or drop-ins."""
-        if not dir_path.exists():
+        try:
+            if not dir_path.exists():
+                return
+        except PermissionError as e:
+            collection.add(Finding(
+                id="PH-SYSTEMD-090",
+                category="systemd",
+                severity=Severity.INFO,
+                title="Unreadable systemd directory (permission denied)",
+                description=f"Permission was denied when listing {dir_path}.",
+                evidence=str(e),
+                location=str(dir_path),
+                recommendation="Run PersistHunt with elevated permissions if complete auditing is required."
+            ))
+            return
+        except OSError:
             return
 
         try:
@@ -164,7 +187,13 @@ class SystemdDetector(BaseDetector):
             entry_path = Path(entry.path)
 
             # Check for broken symlink
-            if entry.is_symlink() and not entry_path.exists():
+            is_broken = False
+            if entry.is_symlink():
+                try:
+                    is_broken = not entry_path.exists()
+                except (OSError, PermissionError):
+                    is_broken = False
+            if is_broken:
                 collection.add(Finding(
                     id="PH-SYSTEMD-091",
                     category="systemd",
@@ -202,7 +231,10 @@ class SystemdDetector(BaseDetector):
                 entry.name.endswith(ext)
                 for ext in (".service", ".timer", ".socket", ".path", ".conf", ".target")
             ):
-                canonical_path = str(entry_path.resolve()) if entry_path.exists() else str(entry_path)
+                try:
+                    canonical_path = str(entry_path.resolve())
+                except (OSError, PermissionError):
+                    canonical_path = str(entry_path)
                 if canonical_path in scanned_files:
                     continue
                 scanned_files.add(canonical_path)

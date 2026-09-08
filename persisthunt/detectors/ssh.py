@@ -136,7 +136,12 @@ class SSHDetector(BaseDetector):
         )
 
         # 2. Audit /home/*/.ssh/authorized_keys
-        if self.home_dir.exists():
+        try:
+            home_exists = self.home_dir.exists()
+        except (OSError, PermissionError):
+            home_exists = False
+
+        if home_exists:
             try:
                 user_entries = list(os.scandir(self.home_dir))
             except PermissionError as e:
@@ -177,11 +182,21 @@ class SSHDetector(BaseDetector):
                 collection=collection,
             )
 
-        # 4. Audit custom explicit key files
+        # 4. Audit any custom files explicitly supplied
         for c_file in self.custom_key_files:
-            canonical = str(c_file.resolve()) if c_file.exists() else str(c_file)
+            try:
+                c_exists = c_file.exists()
+            except (OSError, PermissionError):
+                c_exists = False
+            if not c_exists:
+                continue
+            try:
+                canonical = str(c_file.resolve())
+            except (OSError, PermissionError):
+                canonical = str(c_file)
             if canonical not in scanned_files:
                 scanned_files.add(canonical)
+                self._check_permissions(c_file, is_dir=False, collection=collection)
                 self._audit_key_file(
                     file_path=c_file,
                     is_root=False,
@@ -203,7 +218,22 @@ class SSHDetector(BaseDetector):
         collection: FindingCollection,
     ) -> None:
         """Inspect a .ssh directory and its authorized_keys files."""
-        if not ssh_dir.exists():
+        try:
+            if not ssh_dir.exists():
+                return
+        except PermissionError as e:
+            collection.add(Finding(
+                id="PH-SSH-090",
+                category="ssh",
+                severity=Severity.INFO,
+                title="Unreadable .ssh directory (permission denied)",
+                description=f"Permission was denied when accessing {ssh_dir}.",
+                evidence=str(e),
+                location=str(ssh_dir),
+                recommendation="Run PersistHunt with elevated permissions if complete auditing is required."
+            ))
+            return
+        except OSError:
             return
 
         # Check directory permissions
@@ -229,7 +259,13 @@ class SSHDetector(BaseDetector):
 
         for entry in entries:
             entry_path = Path(entry.path)
-            if entry.is_symlink() and not entry_path.exists():
+            is_broken = False
+            if entry.is_symlink():
+                try:
+                    is_broken = not entry_path.exists()
+                except (OSError, PermissionError):
+                    is_broken = False
+            if is_broken:
                 collection.add(Finding(
                     id="PH-SSH-091",
                     category="ssh",
@@ -243,7 +279,10 @@ class SSHDetector(BaseDetector):
                 continue
 
             if entry.name in ("authorized_keys", "authorized_keys2"):
-                canonical = str(entry_path.resolve()) if entry_path.exists() else str(entry_path)
+                try:
+                    canonical = str(entry_path.resolve())
+                except (OSError, PermissionError):
+                    canonical = str(entry_path)
                 if canonical not in scanned_files:
                     scanned_files.add(canonical)
                     self._check_permissions(entry_path, is_dir=False, collection=collection)
@@ -293,8 +332,22 @@ class SSHDetector(BaseDetector):
         is_service_account: bool,
         collection: FindingCollection,
     ) -> None:
-        """Parse and inspect an authorized_keys file."""
-        if not file_path.exists():
+        try:
+            if not file_path.exists():
+                return
+        except PermissionError as e:
+            collection.add(Finding(
+                id="PH-SSH-090",
+                category="ssh",
+                severity=Severity.INFO,
+                title="Unreadable authorized_keys file (permission denied)",
+                description=f"Permission was denied when accessing {file_path}.",
+                evidence=str(e),
+                location=str(file_path),
+                recommendation="Run PersistHunt with elevated permissions if complete key auditing is required."
+            ))
+            return
+        except OSError:
             return
 
         try:
@@ -505,16 +558,22 @@ class SSHDetector(BaseDetector):
         """Audit /etc/ssh/sshd_config and drop-in configurations."""
         config_files: List[Path] = []
 
-        if self.sshd_config_path.exists():
-            config_files.append(self.sshd_config_path)
+        try:
+            if self.sshd_config_path.exists():
+                config_files.append(self.sshd_config_path)
+        except (OSError, PermissionError):
+            pass
 
-        if self.sshd_config_d.exists():
-            try:
-                for entry in os.scandir(self.sshd_config_d):
-                    if entry.is_file() and entry.name.endswith(".conf"):
-                        config_files.append(Path(entry.path))
-            except (OSError, PermissionError):
-                pass
+        try:
+            if self.sshd_config_d.exists():
+                try:
+                    for entry in os.scandir(self.sshd_config_d):
+                        if entry.is_file() and entry.name.endswith(".conf"):
+                            config_files.append(Path(entry.path))
+                except (OSError, PermissionError):
+                    pass
+        except (OSError, PermissionError):
+            pass
 
         for cfg in config_files:
             try:

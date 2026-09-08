@@ -183,8 +183,13 @@ class TestSecurityAndHardening(unittest.TestCase):
             safe_read_text(fifo_path)
         self.assertIn("Non-regular or special file", str(ctx2.exception))
 
-        # Test CronDetector on FIFO crontab
-        cron = CronDetector(system_crontab=fifo_path)
+        # Test CronDetector on FIFO crontab in isolation
+        cron = CronDetector(
+            system_crontab=fifo_path,
+            cron_d_dir=self.tmp / "none",
+            script_dirs=[],
+            spool_dirs=[],
+        )
         findings = cron.scan()
         # Should record an INFO or handle safely without hanging
         self.assertTrue(all(f.severity == Severity.INFO for f in findings))
@@ -284,7 +289,12 @@ class TestSecurityAndHardening(unittest.TestCase):
         empty_cron = self.tmp / "empty_crontab"
         empty_cron.touch()
 
-        cron = CronDetector(system_crontab=empty_cron, cron_d_dir=self.tmp / "none")
+        cron = CronDetector(
+            system_crontab=empty_cron,
+            cron_d_dir=self.tmp / "none",
+            script_dirs=[],
+            spool_dirs=[],
+        )
         findings = cron.scan()
         self.assertEqual(len(findings), 0)
 
@@ -294,7 +304,12 @@ class TestSecurityAndHardening(unittest.TestCase):
         fake_cron_d = self.tmp / "cron_d_as_file"
         fake_cron_d.write_text("I am a file, not a directory\n")
 
-        cron = CronDetector(cron_d_dir=fake_cron_d, system_crontab=self.tmp / "none")
+        cron = CronDetector(
+            cron_d_dir=fake_cron_d,
+            system_crontab=self.tmp / "none",
+            script_dirs=[],
+            spool_dirs=[],
+        )
         findings = cron.scan()
         self.assertIsInstance(findings, FindingCollection)
 

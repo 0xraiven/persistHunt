@@ -120,7 +120,22 @@ class CronDetector(BaseDetector):
         collection: FindingCollection,
     ) -> None:
         """Safely read and audit a crontab-format file."""
-        if not file_path.exists():
+        try:
+            if not file_path.exists():
+                return
+        except PermissionError as e:
+            collection.add(Finding(
+                id="PH-CRON-090",
+                category="cron",
+                severity=Severity.INFO,
+                title="Unreadable cron file (permission denied)",
+                description=f"Permission was denied when reading crontab file at {file_path}.",
+                evidence=str(e),
+                location=str(file_path),
+                recommendation="Run PersistHunt with elevated permissions if complete auditing of this file is required."
+            ))
+            return
+        except OSError:
             return
 
         try:
@@ -202,7 +217,22 @@ class CronDetector(BaseDetector):
 
     def _scan_cron_d_directory(self, dir_path: Path, collection: FindingCollection) -> None:
         """Inspect /etc/cron.d drop-in directory."""
-        if not dir_path.exists():
+        try:
+            if not dir_path.exists():
+                return
+        except PermissionError as e:
+            collection.add(Finding(
+                id="PH-CRON-090",
+                category="cron",
+                severity=Severity.INFO,
+                title="Unreadable cron directory (permission denied)",
+                description=f"Permission was denied when listing {dir_path}.",
+                evidence=str(e),
+                location=str(dir_path),
+                recommendation="Run PersistHunt with elevated permissions if auditing of this directory is required."
+            ))
+            return
+        except OSError:
             return
 
         try:
@@ -225,7 +255,13 @@ class CronDetector(BaseDetector):
         for entry in entries:
             entry_path = Path(entry.path)
             # Check for broken symlink
-            if entry.is_symlink() and not entry_path.exists():
+            is_broken = False
+            if entry.is_symlink():
+                try:
+                    is_broken = not entry_path.exists()
+                except (OSError, PermissionError):
+                    is_broken = False
+            if is_broken:
                 collection.add(Finding(
                     id="PH-CRON-091",
                     category="cron",
@@ -256,7 +292,22 @@ class CronDetector(BaseDetector):
 
     def _scan_script_directory(self, dir_path: Path, collection: FindingCollection) -> None:
         """Inspect scheduled script directories (cron.hourly, cron.daily, etc.)."""
-        if not dir_path.exists():
+        try:
+            if not dir_path.exists():
+                return
+        except PermissionError as e:
+            collection.add(Finding(
+                id="PH-CRON-090",
+                category="cron",
+                severity=Severity.INFO,
+                title="Unreadable cron script directory (permission denied)",
+                description=f"Permission was denied when listing {dir_path}.",
+                evidence=str(e),
+                location=str(dir_path),
+                recommendation="Run PersistHunt with elevated permissions if auditing of this directory is required."
+            ))
+            return
+        except OSError:
             return
 
         try:
@@ -279,7 +330,13 @@ class CronDetector(BaseDetector):
         for entry in entries:
             entry_path = Path(entry.path)
             # Check for broken symlink
-            if entry.is_symlink() and not entry_path.exists():
+            is_broken = False
+            if entry.is_symlink():
+                try:
+                    is_broken = not entry_path.exists()
+                except (OSError, PermissionError):
+                    is_broken = False
+            if is_broken:
                 collection.add(Finding(
                     id="PH-CRON-091",
                     category="cron",
@@ -365,10 +422,28 @@ class CronDetector(BaseDetector):
         collection: FindingCollection,
     ) -> None:
         """Inspect user crontab spool directory."""
-        if not spool_path.exists():
+        try:
+            if not spool_path.exists():
+                return
+        except PermissionError as e:
+            collection.add(Finding(
+                id="PH-CRON-090",
+                category="cron",
+                severity=Severity.INFO,
+                title="Unreadable user crontab spool (permission denied)",
+                description=f"Permission was denied when accessing user crontab directory at {spool_path}. Inspecting user crontabs typically requires elevated privileges.",
+                evidence=str(e),
+                location=str(spool_path),
+                recommendation="Run PersistHunt with elevated permissions if complete user crontab auditing is required."
+            ))
+            return
+        except OSError:
             return
 
-        canonical = str(spool_path.resolve()) if spool_path.is_symlink() or spool_path.exists() else str(spool_path)
+        try:
+            canonical = str(spool_path.resolve())
+        except (OSError, PermissionError):
+            canonical = str(spool_path)
         if canonical in scanned_paths:
             return
         scanned_paths.add(canonical)

@@ -113,18 +113,34 @@ class SuidDetector(BaseDetector):
 
         # 1. Enumerate configured search paths
         for search_path in self.search_paths:
-            if not search_path.exists():
+            try:
+                if not search_path.exists():
+                    continue
+                if search_path.is_file():
+                    self._audit_file(search_path, scanned_files, collection)
+                elif search_path.is_dir():
+                    self._traverse_directory(search_path, scanned_files, collection)
+            except PermissionError as e:
+                collection.add(Finding(
+                    id="PH-SUID-090",
+                    category="suid",
+                    severity=Severity.INFO,
+                    title="Unreadable directory during SUID scan (permission denied)",
+                    description=f"Permission was denied accessing {search_path}.",
+                    evidence=str(e),
+                    location=str(search_path),
+                    recommendation="Run PersistHunt with elevated permissions if complete filesystem enumeration is required."
+                ))
+            except OSError:
                 continue
-
-            if search_path.is_file():
-                self._audit_file(search_path, scanned_files, collection)
-            elif search_path.is_dir():
-                self._traverse_directory(search_path, scanned_files, collection)
 
         # 2. Enumerate any explicitly configured files
         for c_file in self.custom_files:
-            if c_file.exists():
-                self._audit_file(c_file, scanned_files, collection)
+            try:
+                if c_file.exists():
+                    self._audit_file(c_file, scanned_files, collection)
+            except (OSError, PermissionError):
+                continue
 
         return collection
 
@@ -228,8 +244,8 @@ class SuidDetector(BaseDetector):
             return
 
         try:
-            canonical = str(file_path.resolve()) if file_path.exists() else str(file_path)
-        except OSError:
+            canonical = str(file_path.resolve())
+        except (OSError, PermissionError):
             canonical = str(file_path)
 
         if canonical in scanned_files:
