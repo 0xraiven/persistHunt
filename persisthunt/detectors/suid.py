@@ -3,7 +3,7 @@ import stat
 import pwd
 import grp
 from pathlib import Path
-from typing import Optional, Union, Iterable, List, Set, Dict
+from typing import Optional, Union, Iterable, List, Set, Dict, Tuple
 from persisthunt.findings import Finding, FindingCollection, Severity
 from persisthunt.detectors.base import BaseDetector
 

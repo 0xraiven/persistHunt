@@ -2,11 +2,12 @@
 
 > A Linux persistence detection and security auditing framework.
 
+[![CI](https://github.com/0xraiven/persistHunt/actions/workflows/ci.yml/badge.svg)](https://github.com/0xraiven/persistHunt/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.8+](https://img.shields.io/badge/Python-3.8%2B-brightgreen.svg)](pyproject.toml)
 [![Tests](https://img.shields.io/badge/Tests-183%20Passed-success.svg)](tests/)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Stdlib)-blueviolet.svg)](requirements.txt)
-[![Version: v0.1.0](https://img.shields.io/badge/Version-v0.1.0-orange.svg)](pyproject.toml)
+[![Version: v0.1.0](https://img.shields.io/badge/Version-v0.1.0-orange.svg)](CHANGELOG.md)
 
 PersistHunt is a specialized, zero-dependency security framework engineered to audit Linux systems for persistence mechanisms, hidden backdoors, unauthorized elevated privileges, and post-exploitation artifacts.
 
@@ -382,6 +383,16 @@ persisthunt/
 - [ ] **eBPF System Call Auditing**: Real-time event detection for runtime persistence installation.
 - [ ] **systemd Timer Frequency Analysis**: Automated detection of high-frequency stealth timers.
 - [ ] **Auditd Rule Generation**: Exporting proactive auditd rules matching discovered persistence mechanisms.
+
+---
+
+## Community & Contributing
+
+We welcome contributions from security researchers and open source developers!
+
+- **Contributing Guide**: Read [CONTRIBUTING.md](CONTRIBUTING.md) for architectural invariants, coding conventions, and a step-by-step guide to authoring new persistence detectors.
+- **Security Policy**: For vulnerability reporting and coordinated disclosure, see [SECURITY.md](SECURITY.md).
+- **Changelog**: All release notes and version histories are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

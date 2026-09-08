@@ -17,7 +17,6 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Information Technology",
     "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
@@ -40,6 +39,13 @@ dev = [
 
 [project.scripts]
 persisthunt = "persisthunt.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/0xraiven/persistHunt"
+Documentation = "https://github.com/0xraiven/persistHunt#readme"
+Repository = "https://github.com/0xraiven/persistHunt.git"
+Issues = "https://github.com/0xraiven/persistHunt/issues"
+Changelog = "https://github.com/0xraiven/persistHunt/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]

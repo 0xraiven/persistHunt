@@ -1,7 +1,7 @@
 import sys
 import argparse
 from pathlib import Path
-from typing import Optional, List, Dict, Type, Set, Union
+from typing import Optional, List, Dict, Type, Set, Union, Any
 from persisthunt.reporting import TOOL_VERSION as __version__, generate_report
 from persisthunt.findings import Finding, FindingCollection, Severity
 from persisthunt.detectors import (
