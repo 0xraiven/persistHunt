@@ -13,18 +13,6 @@ PersistHunt is a specialized, zero-dependency security framework engineered to a
 
 ---
 
-## Visual Overview
-
-| Clean System Audit | Suspicious Persistence Finding |
-|---|---|
-| ![Clean Scan](docs/screenshots/clean_scan.svg) | ![Suspicious Finding](docs/screenshots/suspicious_finding.svg) |
-
-| Explainable Risk Summary | Machine-Readable JSON Output |
-|---|---|
-| ![Risk Summary](docs/screenshots/risk_summary.svg) | ![JSON Output](docs/screenshots/json_output.svg) |
-
----
-
 ## Features
 
 - **Strict Read-Only & Non-Interfering**: Never executes discovered commands, never modifies files, never alters accounts or permissions, and never connects to external network sockets.
