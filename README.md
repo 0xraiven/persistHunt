@@ -14,13 +14,13 @@ The finding engine provides a standardized representation for security findings.
 
 A `Finding` represents a single security issue detected on the system:
 
-- `id`: A unique identifier for the finding type (e.g., `PH-CRON-001`, `PH-SYSTEMD-001`, `PH-SSH-001`).
-- `category`: The security category (e.g., `cron`, `systemd`, `ssh`).
+- `id`: A unique identifier for the finding type (e.g., `PH-CRON-001`, `PH-SYSTEMD-001`, `PH-SSH-001`, `PH-SHELL-001`).
+- `category`: The security category (e.g., `cron`, `systemd`, `ssh`, `shell`).
 - `severity`: Severity level, one of `Severity` enum values (`INFO`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
 - `title`: Short human-readable summary.
 - `description`: Detailed explanation of the detected condition.
 - `evidence`: (Optional) The raw line, file reference, or diagnostic triggering detection.
-- `location`: (Optional) The filesystem path and line number (e.g., `/home/victim/.ssh/authorized_keys:1`).
+- `location`: (Optional) The filesystem path and line number (e.g., `/home/victim/.bashrc:3`).
 - `recommendation`: (Optional) Actionable remediation advice.
 
 #### Available Severity Levels
@@ -128,12 +128,6 @@ The detector inspects:
 - **Service account homes**: `/var/www/.ssh/`, `/var/lib/*/.ssh/`, `/srv/.ssh/`
 - **SSH daemon configuration**: `/etc/ssh/sshd_config`, `/etc/ssh/sshd_config.d/*.conf`
 
-#### Credential Protection & Safe Fingerprinting
-
-- **No Private Key Disclosure**: The detector never prints or collects private key material. If private keys are accidentally placed in `authorized_keys`, the evidence is redacted (`[REDACTED PRIVATE KEY MATERIAL]`).
-- **OpenSSH-Compatible Fingerprints**: Public keys are SHA256 fingerprinted (`SHA256:...`) rather than dumping complete base64 key material.
-- **Strict Read-Only**: Never alters keys or daemon configs, never restarts services, and never initiates network connections.
-
 #### Indicator Rules & Finding IDs (SSH)
 
 | Finding ID | Category | Severity | Description | Indicators |
@@ -148,16 +142,56 @@ The detector inspects:
 | `PH-SSH-091` | ssh | `LOW` | Broken symlink in SSH directory | Symlink pointing to missing key target |
 | `PH-SSH-092` | ssh | `LOW` | Malformed authorized_keys line | Line fails OpenSSH public key syntax |
 
+---
+
+### Stage 5: Shell Startup Persistence Detection
+
+Stage 5 introduces `ShellDetector` (`persisthunt.detectors.shell`), auditing shell initialization scripts for unauthorized commands, reverse shells, downloaders, and credential-harvesting aliases.
+
+#### Supported Locations
+
+The detector inspects:
+- **System-wide shell startup files**:
+  - `/etc/profile`
+  - `/etc/profile.d/*.sh`
+  - `/etc/bash.bashrc`, `/etc/bashrc`
+  - `/etc/zsh/zprofile`, `/etc/zsh/zshrc`, `/etc/zshrc`
+  - `/etc/environment`
+- **User-level shell startup files**:
+  - Root: `/root/.bashrc`, `/root/.profile`, `/root/.bash_profile`, `/root/.bash_login`, `/root/.zshrc`, `/root/.bash_aliases`
+  - Users: `/home/*/.bashrc`, `/home/*/.profile`, `/home/*/.bash_profile`, `/home/*/.bash_login`, `/home/*/.zshrc`, `/home/*/.bash_aliases`
+
+#### Safe Inspection Model
+
+- **Never Sourced or Executed**: Shell scripts are never executed, sourced (`.`), or evaluated in a shell.
+- **Untrusted Plaintext**: Content is parsed strictly as untrusted text line-by-line.
+- **Concise Evidence**: Limits evidence strictly to the offending line and line number without dumping full files.
+
+#### Indicator Rules & Finding IDs (Shell)
+
+| Finding ID | Category | Severity | Description | Indicators |
+|---|---|---|---|---|
+| `PH-SHELL-001` | shell | `HIGH` | Interactive network utility or raw socket | `/dev/tcp`, `/dev/udp`, `nc`, `ncat`, `netcat`, `socat`, `mkfifo` |
+| `PH-SHELL-002` | shell | `HIGH` / `MEDIUM` | Remote download utility or piped execution | `curl ... \| bash`, `wget ... \| sh` (`HIGH`); standalone `curl`/`wget` (`MEDIUM`) |
+| `PH-SHELL-003` | shell | `HIGH` | Reference or execution from temporary directory | Paths referencing or executing from `/tmp/`, `/var/tmp/`, `/dev/shm/` |
+| `PH-SHELL-004` | shell | `HIGH` / `MEDIUM` | Anomalous hidden path or binary executable | Execution from non-standard hidden folder (`MEDIUM`); binary file in startup path (`HIGH`) |
+| `PH-SHELL-005` | shell | `MEDIUM` | Inline interpreter command execution | `python -c`, `perl -e`, `bash -c`, `sh -c` |
+| `PH-SHELL-006` | shell | `HIGH` | Encoded payload execution | `base64 -d`, `base64 --decode` in pipeline |
+| `PH-SHELL-007` | shell | `HIGH` | Privilege utility alias hijacking | `alias sudo=...`, `alias su=...`, `alias ssh=...` |
+| `PH-SHELL-008` | shell | `HIGH` | Insecure world-writable startup file | Startup script is world-writable (`chmod 666`/`777`) |
+| `PH-SHELL-090` | shell | `INFO` | Unreadable startup file or directory | `PermissionError` (diagnostic finding) |
+| `PH-SHELL-091` | shell | `LOW` | Broken symlink in startup directory | Dangling symlink in `/etc/profile.d` |
+
 #### Usage Example
 
 ```python
-from persisthunt import SSHDetector, Severity
+from persisthunt import ShellDetector, Severity
 
 # Initialize and scan
-detector = SSHDetector()
+detector = ShellDetector()
 findings = detector.scan()
 
-# Inspect high-severity SSH findings
+# Inspect high-severity shell findings
 for finding in findings.by_severity(Severity.HIGH):
     print(f"[{finding.id}] {finding.title}")
     print(f"  Location: {finding.location}")
@@ -169,14 +203,14 @@ for finding in findings.by_severity(Severity.HIGH):
 
 ```json
 {
-  "id": "PH-SSH-002",
-  "category": "ssh",
+  "id": "PH-SHELL-007",
+  "category": "shell",
   "severity": "HIGH",
-  "title": "Suspicious forced command in SSH authorized key",
-  "description": "Authorized key enforces execution of command containing suspicious characteristics: temporary directory path (/tmp, /var/tmp, /dev/shm).",
-  "evidence": "Type: ssh-ed25519, Fingerprint: SHA256:cnhDmnStakz6XP3eUC+xFez4mfrj6tCgP3NcCO3yKRQ, Comment: evil@remote, Options: command=\"/tmp/backdoor.sh\",no-pty",
-  "location": "/home/victim/.ssh/authorized_keys:1",
-  "recommendation": "Review the forced command immediately and revoke the key if unauthorized."
+  "title": "Privilege or authentication utility alias defined in shell startup",
+  "description": "Line defines an alias overriding a critical authentication or privilege utility (sudo, su, ssh). This technique is frequently used for credential theft or command interception.",
+  "evidence": "alias sudo='/tmp/.sudo_logger'",
+  "location": "/home/victim/.bashrc:5",
+  "recommendation": "Audit the alias definition to ensure it does not intercept or log user credentials."
 }
 ```
 

