@@ -14,8 +14,8 @@ The finding engine provides a standardized representation for security findings.
 
 A `Finding` represents a single security issue detected on the system:
 
-- `id`: A unique identifier for the finding type (e.g., `PH-CRON-001`, `PH-SYSTEMD-001`, `PH-SSH-001`, `PH-SHELL-001`, `PH-SUID-001`).
-- `category`: The security category (e.g., `cron`, `systemd`, `ssh`, `shell`, `suid`).
+- `id`: A unique identifier for the finding type (e.g., `PH-CRON-001`, `PH-SYSTEMD-001`, `PH-SSH-001`, `PH-SHELL-001`, `PH-SUID-001`, `PH-PROC-001`, `PH-ACCT-001`).
+- `category`: The security category (e.g., `cron`, `systemd`, `ssh`, `shell`, `suid`, `process`, `account`).
 - `severity`: Severity level, one of `Severity` enum values (`INFO`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
 - `title`: Short human-readable summary.
 - `description`: Detailed explanation of the detected condition.
@@ -279,6 +279,89 @@ for finding in findings.filter(lambda f: f.severity in (Severity.HIGH, Severity.
   "location": "/opt/legacy_tool",
   "recommendation": "Remove write permissions immediately: chmod go-w /opt/legacy_tool."
 }
+```
+
+---
+
+### Stage 7: Process and Account Persistence Detection
+
+Stage 7 implements runtime process persistence auditing (`ProcessDetector`) and local account persistence auditing (`AccountDetector`).
+
+---
+
+#### 1. Process Persistence Detector (`ProcessDetector`)
+
+`ProcessDetector` inspects active Linux processes via `/proc` to detect runtime persistence anomalies, memory-resident deleted payloads, reverse shells, and unauthorized child processes.
+
+##### Safety & Privacy Architecture
+- **Strict Read-Only Inspection**: Never signals or kills processes (`os.kill`), never attaches debuggers (`ptrace`), never injects code, and never accesses process memory (`/proc/[pid]/mem`).
+- **Credential & Secret Sanitization**: Automatically masks passwords, authentication tokens, and API keys (`***REDACTED***`) in command line arguments. Never accesses or dumps `/proc/[pid]/environ`.
+- **Transient Process Resiliency**: Gracefully handles short-lived processes that exit during inspection (`ProcessLookupError`, `FileNotFoundError`).
+
+##### Indicator Rules & Finding IDs (Process)
+
+| Finding ID | Category | Severity | Description | Indicators |
+|---|---|---|---|---|
+| `PH-PROC-001` | process | `HIGH` | Process executing from temporary or staging directory | Executable or cmdline in `/tmp/`, `/var/tmp/`, `/dev/shm/` |
+| `PH-PROC-002` | process | `HIGH` | Process executing from hidden directory path | Executable path contains hidden folders (e.g., `.../.hidden/...`) |
+| `PH-PROC-003` | process | `HIGH` | Running process with deleted binary on disk | `/proc/[pid]/exe` target ends with `(deleted)` |
+| `PH-PROC-004` | process | `HIGH` | Suspicious command line execution | Reverse shell (`/dev/tcp`, `/dev/udp`), `nc -e`, `curl ... \| sh`, `base64 -d \| sh` |
+| `PH-PROC-005` | process | `HIGH` | Web server or service daemon spawned interactive shell | Server parent (`nginx`, `apache2`, `httpd`, `mysqld`, etc.) spawned shell child (`sh`, `bash`) |
+| `PH-PROC-006` | process | `MEDIUM` | Inline interpreter command execution | `python -c`, `perl -e`, `ruby -e`, `php -r` |
+| `PH-PROC-090` | process | `INFO` | Process directory unavailable or unreadable | `PermissionError` (diagnostic finding) |
+
+##### Usage Example (Process)
+
+```python
+from persisthunt import ProcessDetector, Severity
+
+detector = ProcessDetector()
+findings = detector.scan()
+
+for finding in findings.filter(lambda f: f.severity in (Severity.HIGH, Severity.CRITICAL)):
+    print(f"[{finding.severity.value}] {finding.id} - {finding.title}")
+    print(f"  Location: {finding.location}")
+    print(f"  Evidence: {finding.evidence}")
+    print(f"  Recommendation: {finding.recommendation}")
+```
+
+---
+
+#### 2. Account Persistence Detector (`AccountDetector`)
+
+`AccountDetector` audits local authentication and identity databases (`/etc/passwd`, `/etc/shadow`, `/etc/group`) for backdoor accounts and privilege escalation vectors.
+
+##### Safety & Privacy Architecture
+- **Strict Read-Only Inspection**: Never modifies `/etc/passwd`, `/etc/shadow`, or `/etc/group`. Never alters passwords or locks accounts.
+- **Hash Privacy Shielding**: Never displays, logs, or exports raw password hash strings from `/etc/shadow`. Only reports hash algorithm types or empty/locked status.
+- **Permission Resiliency**: Handles unreadable `/etc/shadow` gracefully via diagnostic finding `PH-ACCT-090`.
+
+##### Indicator Rules & Finding IDs (Account)
+
+| Finding ID | Category | Severity | Description | Indicators |
+|---|---|---|---|---|
+| `PH-ACCT-001` | account | `CRITICAL` | Non-root account with UID 0 | Account other than `root` has `UID == 0` |
+| `PH-ACCT-002` | account | `HIGH` | Service account with interactive login shell | System/service account configured with `/bin/bash`, `/bin/sh`, etc. |
+| `PH-ACCT-003` | account | `HIGH` | Account configured with suspicious home directory | Home directory in `/tmp/`, `/var/tmp/`, `/dev/shm/`, or hidden directory |
+| `PH-ACCT-004` | account | `CRITICAL` | Account configured with empty password | Empty password hash field in `/etc/shadow` |
+| `PH-ACCT-005` | account | `HIGH` | User account with non-standard login shell | Shell pointing to non-standard or unusual binary path |
+| `PH-ACCT-006` | account | `MEDIUM` | Non-standard account in administrative group | User account granted `sudo` or `wheel` membership |
+| `PH-ACCT-007` | account | `LOW` | Recently created or modified local account | Shadow `last_change` timestamp modified within last 7 days |
+| `PH-ACCT-090` | account | `INFO` | Account database unreadable | `PermissionError` on `/etc/shadow` or `/etc/passwd` |
+
+##### Usage Example (Account)
+
+```python
+from persisthunt import AccountDetector, Severity
+
+detector = AccountDetector()
+findings = detector.scan()
+
+for finding in findings.filter(lambda f: f.severity in (Severity.HIGH, Severity.CRITICAL)):
+    print(f"[{finding.severity.value}] {finding.id} - {finding.title}")
+    print(f"  Location: {finding.location}")
+    print(f"  Evidence: {finding.evidence}")
+    print(f"  Recommendation: {finding.recommendation}")
 ```
 
 ---

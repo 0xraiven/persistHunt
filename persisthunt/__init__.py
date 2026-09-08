@@ -8,6 +8,8 @@ from persisthunt.detectors import (
     SSHDetector,
     ShellDetector,
     SuidDetector,
+    ProcessDetector,
+    AccountDetector,
 )
 
 __all__ = [
@@ -20,4 +22,7 @@ __all__ = [
     "SSHDetector",
     "ShellDetector",
     "SuidDetector",
+    "ProcessDetector",
+    "AccountDetector",
 ]
+
