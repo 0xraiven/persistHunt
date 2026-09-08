@@ -49,6 +49,11 @@ class FindingCollection:
         """Add a finding to the collection."""
         self._findings.append(finding)
 
+    def extend(self, findings: Iterable[Finding]) -> None:
+        """Add multiple findings to the collection."""
+        for f in findings:
+            self._findings.append(f)
+
     def remove(self, finding: Finding) -> None:
         """Remove a finding from the collection."""
         self._findings.remove(finding)

@@ -1,0 +1,5 @@
+# PersistHunt Runtime Dependencies
+# PersistHunt requires zero external runtime dependencies (Python standard library only).
+
+# Optional Development / Testing Dependencies
+pytest>=7.0.0
