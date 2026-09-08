@@ -16,8 +16,17 @@ from persisthunt.risk import (
     RiskReport,
     calculate_risk,
 )
+from persisthunt.reporting import (
+    ScanReport,
+    Reporter,
+    generate_report,
+    TOOL_VERSION,
+)
+
+__version__ = TOOL_VERSION
 
 __all__ = [
+    "__version__",
     "Finding",
     "FindingCollection",
     "Severity",
@@ -32,6 +41,10 @@ __all__ = [
     "RiskScorer",
     "RiskReport",
     "calculate_risk",
+    "ScanReport",
+    "Reporter",
+    "generate_report",
 ]
+
 
 

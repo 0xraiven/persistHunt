@@ -458,6 +458,121 @@ print(f"Highest Severity: {report.highest_severity}")
 
 ---
 
+### Stage 9: Reporting and JSON Output
+
+Stage 9 implements machine-readable and human-readable audit reporting (`ScanReport`, `Reporter`, and `generate_report`).
+
+#### Supported Formats
+
+1. **Terminal Output**: Clean console summary with finding totals, severity breakdown, risk score, and detailed remediation steps.
+2. **JSON Schema**: Stable, machine-readable format suitable for SIEM, CI/CD pipelines, and automated security ingestion.
+3. **HTML Report**: Clean, self-contained, responsive HTML report with embedded styling, designed for offline viewing in air-gapped environments without external dependencies.
+
+#### Stable JSON Schema
+
+```json
+{
+  "tool": "PersistHunt",
+  "version": "0.1.0",
+  "timestamp": "2026-09-08T07:31:12.331573+00:00",
+  "host": "linux-prod-node-01",
+  "risk_score": 6.6,
+  "statistics": {
+    "total_findings": 8,
+    "highest_severity": "CRITICAL",
+    "severity_counts": {
+      "CRITICAL": 1,
+      "HIGH": 2,
+      "MEDIUM": 3,
+      "LOW": 2,
+      "INFO": 0
+    },
+    "category_counts": {
+      "account": 1,
+      "process": 1,
+      "shell": 1,
+      "cron": 3,
+      "systemd": 2
+    },
+    "raw_score": 33.0
+  },
+  "findings": [
+    {
+      "id": "PH-ACCT-001",
+      "category": "account",
+      "severity": "CRITICAL",
+      "title": "Non-root user account with UID 0 (root privileges)",
+      "description": "Account 'toor' possesses UID 0.",
+      "evidence": "Username: toor, UID: 0",
+      "location": "/etc/passwd:toor",
+      "recommendation": "Remove unauthorized UID 0 accounts immediately."
+    }
+  ]
+}
+```
+
+#### Terminal Summary Format
+
+```text
+PersistHunt
+Linux Persistence Detection Framework
+
+Scan complete.
+
+Findings: 8
+
+CRITICAL: 1
+HIGH: 2
+MEDIUM: 3
+LOW: 2
+
+Risk Score: 7.2/10
+
+=== Finding Summaries ===
+
+1. [CRITICAL] PH-ACCT-001 - Non-root user account with UID 0 (root privileges)
+   Location: /etc/passwd:toor
+   Evidence: Username: toor, UID: 0
+   Action: Remove unauthorized UID 0 accounts immediately.
+...
+```
+
+#### Usage Example
+
+```python
+from persisthunt import (
+    CronDetector,
+    SystemdDetector,
+    SSHDetector,
+    ShellDetector,
+    SuidDetector,
+    ProcessDetector,
+    AccountDetector,
+    generate_report,
+)
+
+# 1. Run detectors
+findings = CronDetector().scan()
+findings.extend(SystemdDetector().scan())
+findings.extend(SSHDetector().scan())
+findings.extend(ShellDetector().scan())
+findings.extend(SuidDetector().scan())
+findings.extend(ProcessDetector().scan())
+findings.extend(AccountDetector().scan())
+
+# 2. Generate report
+report = generate_report(findings, host="web-node-01")
+
+# 3. Print terminal output
+print(report.to_terminal())
+
+# 4. Save JSON and HTML reports
+report.save_json("audit_report.json")
+report.save_html("audit_report.html")
+```
+
+---
+
 ## Running Tests
 
 Run the full test suite using `pytest`:
@@ -471,4 +586,5 @@ Run the demonstration script:
 ```bash
 python demo.py
 ```
+
 

